@@ -4,7 +4,9 @@
 #include <Wire.h>
 
 // Minimal FT3168 reader (FocalTech standard register layout). Avoids
-// vendoring Waveshare's GPLv3 Arduino_DriveBus library.
+// vendoring Waveshare's GPLv3 Arduino_DriveBus library. Same register
+// layout as the 1.8 port, but on this board TP_RST is a direct GPIO
+// (no IO expander) so we pulse it ourselves during init.
 //   reg 0x02:        low nibble = active finger count
 //   reg 0x03 / 0x04: X1 high (low nibble) + X1 low
 //   reg 0x05 / 0x06: Y1 high (low nibble) + Y1 low
@@ -38,6 +40,14 @@ static void ft3168_read_into_shared_state(void) {
 }
 
 void touch_hal_init(void) {
+    // Pulse TP_RST: hold low ≥10 ms, then high to bring controller out
+    // of reset. Direct GPIO on this board (no IO expander like the 1.8).
+    pinMode(TP_RST, OUTPUT);
+    digitalWrite(TP_RST, LOW);
+    delay(20);
+    digitalWrite(TP_RST, HIGH);
+    delay(50);
+
     // Power-mode register 0xA5 = 0x00: active scanning.
     Wire.beginTransmission(FT3168_ADDR);
     Wire.write(0xA5);

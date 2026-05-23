@@ -3,7 +3,8 @@
 
 // Display abstraction. The board provides the QSPI bus, panel driver, and any
 // CPU-side rotation. Shared code (main.cpp, LVGL glue) never sees the GFX
-// driver type. Dimensions are not declared here — query board_caps().
+// driver type. Native dimensions live in board_caps(); orientation-aware
+// dimensions live in display_hal_active_width/height() below.
 
 // Construct bus + driver objects. Safe to call before display_hal_begin().
 // On boards with an IO expander gating the LCD reset, the board's
@@ -24,9 +25,26 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
                              const uint16_t* pixels);
 
 // Per-loop housekeeping for rotation-aware boards: detects orientation
-// changes from the IMU, blanks the panel, invalidates LVGL, and ramps
-// brightness back up. No-op on boards without rotation.
+// changes from the IMU, blanks the panel, and ramps brightness back up.
+// On a non-square panel this also raises an internal flag that
+// display_hal_consume_rotation_change() will drain on the next loop so
+// shared code can call lv_display_set_resolution() and ui_rebuild() to
+// match the new orientation. No-op on boards without rotation.
 void display_hal_tick(void);
+
+// Orientation-aware effective LVGL dimensions. On boards without rotation
+// (or with a square panel) these always equal the native width/height. On
+// rotation-enabled non-square boards they swap on quadrants 1 and 3 to
+// reflect the current IMU-latched orientation.
+int16_t display_hal_active_width(void);
+int16_t display_hal_active_height(void);
+
+// One-shot probe: returns true exactly once after each rotation transition
+// (drains an internal flag set inside display_hal_tick). Shared code calls
+// this every loop and, when it returns true, calls lv_display_set_resolution
+// and ui_rebuild() so widgets re-layout for the new orientation. Always
+// returns false on boards without rotation.
+bool display_hal_consume_rotation_change(void);
 
 // LVGL flush regions must be even-aligned on the CO5300; harmless on others.
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2);

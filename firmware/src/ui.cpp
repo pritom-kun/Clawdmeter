@@ -4,6 +4,8 @@
 #include "logo.h"
 #include "icons.h"
 #include "hal/board_caps.h"
+#include "hal/display_hal.h"
+#include "hal/touch_hal.h"
 
 // Custom fonts (scaled for 314 PPI, ~1.9x from original 165 PPI)
 LV_FONT_DECLARE(font_tiempos_56);
@@ -44,17 +46,19 @@ struct Layout {
 };
 static Layout L = {};
 
-// Pick layout values from the active board's pixel dimensions. The two
-// existing boards happen to land on the two breakpoints below; new ports
-// inherit the closer one — visually OK, may need a polish pass for
-// pixel-perfect alignment but never blocks the port from booting.
-static void compute_layout(const BoardCaps& c) {
-    L.scr_w = c.width;
-    L.scr_h = c.height;
+// Pick layout values from the active LVGL dimensions (not native — these
+// are display_hal_active_width/height, which may swap on rotation for a
+// non-square panel). The two existing boards happen to land on the two
+// breakpoints below; new ports inherit the closer one — visually OK, may
+// need a polish pass for pixel-perfect alignment but never blocks the
+// port from booting.
+static void compute_layout(int w, int h) {
+    L.scr_w = (int16_t)w;
+    L.scr_h = (int16_t)h;
     L.margin = 20;
     L.title_y = 30;
 
-    if (c.height >= 460) {
+    if (h >= 460) {
         // Large layout — tuned for 480x480 (AMOLED-2.16).
         L.content_y = 100;
         L.usage_panel_h = 150;
@@ -126,6 +130,17 @@ static lv_image_dsc_t battery_dscs[5];  // empty, low, medium, full, charging
 // ---- Shared ----
 static lv_image_dsc_t logo_dsc;
 static screen_t current_screen = SCREEN_USAGE;
+
+// Cached state replayed into freshly-rebuilt widgets by ui_rebuild() after
+// a rotation-triggered teardown. Populated by ui_update_ble_status() and
+// ui_update_battery() — they own the source of truth.
+static ble_state_t cached_ble_state = BLE_STATE_INIT;
+static char        cached_ble_name[48] = {0};
+static char        cached_ble_mac[48]  = {0};
+static bool        cached_ble_name_valid = false;
+static bool        cached_ble_mac_valid  = false;
+static int         cached_battery_pct      = -1;
+static bool        cached_battery_charging = false;
 
 // Animation state
 static uint32_t anim_last_ms = 0;
@@ -417,21 +432,22 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_obj_add_flag(ble_container, LV_OBJ_FLAG_HIDDEN);
 }
 
-// ======== Public API ========
+// ======== Widget construction ========
 
-void ui_init(void) {
-    compute_layout(board_caps());
+// Build every screen and the persistent logo/battery widgets at the given
+// LVGL dimensions. Called by ui_init() (one-shot at boot) and by
+// ui_rebuild() (after lv_obj_clean on rotation). Idempotent given a clean
+// screen — no allocation that survives across calls.
+static void build_widgets(int w, int h) {
+    compute_layout(w, h);
 
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-    init_icon_dsc_rgb565a8(&logo_dsc, LOGO_WIDTH, LOGO_HEIGHT, logo_data);
-    init_battery_icons();
-
     init_usage_screen(scr);
     init_bluetooth_screen(scr);
-    splash_init(scr);
+    splash_init(scr, w, h);
 
     if (splash_get_root()) {
         lv_obj_add_event_cb(splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
@@ -444,6 +460,67 @@ void ui_init(void) {
     battery_img = lv_image_create(scr);
     lv_image_set_src(battery_img, &battery_dscs[0]);
     lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
+}
+
+// ======== Public API ========
+
+void ui_init(void) {
+    // One-time descriptor init (struct copies into RGB565/A8 lv_image_dscs);
+    // survives any number of subsequent ui_rebuild() calls.
+    init_icon_dsc_rgb565a8(&logo_dsc, LOGO_WIDTH, LOGO_HEIGHT, logo_data);
+    init_battery_icons();
+
+    build_widgets(display_hal_active_width(), display_hal_active_height());
+}
+
+void ui_rebuild(void) {
+    // Capture state that must survive the teardown.
+    screen_t saved_screen = current_screen;
+    int      saved_anim   = splash_get_animation_index();
+
+    lv_obj_t* scr = lv_screen_active();
+    lv_obj_clean(scr);
+
+    // Null every widget pointer that lv_obj_clean just freed. After this
+    // point, no UI code should run until build_widgets() has re-populated
+    // them; ui_rebuild is called synchronously from main.cpp's loop
+    // between lv_timer_handler() calls so that invariant holds.
+    usage_container = nullptr;
+    lbl_title = nullptr;
+    bar_session = nullptr;
+    lbl_session_pct = nullptr;
+    lbl_session_label = nullptr;
+    lbl_session_reset = nullptr;
+    bar_weekly = nullptr;
+    lbl_weekly_pct = nullptr;
+    lbl_weekly_label = nullptr;
+    lbl_weekly_reset = nullptr;
+    lbl_anim = nullptr;
+    ble_container = nullptr;
+    lbl_ble_status = nullptr;
+    lbl_ble_device = nullptr;
+    lbl_ble_mac = nullptr;
+    battery_img = nullptr;
+    logo_img = nullptr;
+
+    // Drop any latched touch from before the rotation so a finger held
+    // across the transition doesn't deliver pre-rotation coordinates to
+    // freshly-built widgets.
+    touch_hal_reset();
+
+    build_widgets(display_hal_active_width(), display_hal_active_height());
+
+    // Replay cached state into the new widgets. Order matters: ui_show_screen
+    // routes through splash_show() → splash_pick_for_current_rate() for the
+    // splash case, which clobbers cur_anim. Setting the animation index
+    // AFTER ui_show_screen guarantees the user's pre-rotation animation
+    // survives the transition.
+    ui_show_screen(saved_screen);
+    splash_set_animation_index(saved_anim);
+    ui_update_ble_status(cached_ble_state,
+                         cached_ble_name_valid ? cached_ble_name : nullptr,
+                         cached_ble_mac_valid  ? cached_ble_mac  : nullptr);
+    ui_update_battery(cached_battery_pct, cached_battery_charging);
 }
 
 void ui_update(const UsageData* data) {
@@ -552,6 +629,20 @@ screen_t ui_get_current_screen(void) {
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
+    // Write through to the cache so ui_rebuild() can replay later.
+    cached_ble_state = state;
+    if (name) {
+        strncpy(cached_ble_name, name, sizeof(cached_ble_name) - 1);
+        cached_ble_name[sizeof(cached_ble_name) - 1] = '\0';
+        cached_ble_name_valid = true;
+    }
+    if (mac) {
+        strncpy(cached_ble_mac, mac, sizeof(cached_ble_mac) - 1);
+        cached_ble_mac[sizeof(cached_ble_mac) - 1] = '\0';
+        cached_ble_mac_valid = true;
+    }
+
+    if (!lbl_ble_status) return;  // mid-rebuild — replay will reach us
     switch (state) {
     case BLE_STATE_CONNECTED:
         lv_label_set_text(lbl_ble_status, "Connected");
@@ -571,12 +662,12 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
         break;
     }
 
-    if (name) {
+    if (name && lbl_ble_device) {
         static char nbuf[48];
         snprintf(nbuf, sizeof(nbuf), "Device: %s", name);
         lv_label_set_text(lbl_ble_device, nbuf);
     }
-    if (mac) {
+    if (mac && lbl_ble_mac) {
         static char mbuf[48];
         snprintf(mbuf, sizeof(mbuf), "Address: %s", mac);
         lv_label_set_text(lbl_ble_mac, mbuf);
@@ -584,6 +675,10 @@ void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) 
 }
 
 void ui_update_battery(int percent, bool charging) {
+    cached_battery_pct      = percent;
+    cached_battery_charging = charging;
+
+    if (!battery_img) return;  // mid-rebuild — replay will reach us
     int idx;
     if (charging) {
         idx = 4;

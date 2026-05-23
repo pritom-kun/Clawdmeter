@@ -11,8 +11,12 @@
 struct BoardCaps {
     const char* name;        // human-readable, e.g. "Waveshare AMOLED 2.16"
 
-    int16_t width;           // active display width in pixels
-    int16_t height;          // active display height in pixels
+    // Native physical panel dimensions. Constant for the lifetime of the
+    // program — never reflects rotation. For the orientation-aware "what
+    // size is LVGL currently rendering at?" answer, call
+    // display_hal_active_width/height() instead.
+    int16_t width;
+    int16_t height;
 
     uint8_t button_count;    // 1 = primary (BOOT) only; 2 = primary + secondary
     bool    has_rotation;    // IMU-driven CPU rotation in the flush callback

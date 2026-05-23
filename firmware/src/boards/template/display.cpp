@@ -49,6 +49,14 @@ void display_hal_tick(void) {
     // CPU-rotation transition (see the 2.16 reference port).
 }
 
+// Default stubs for boards without rotation. If BOARD_HAS_ROTATION=1 in
+// board.h, replace these with an IMU-aware implementation that swaps W and
+// H on quadrants 1/3 (non-square panels) and drains a per-tick flag set
+// by display_hal_tick(). See boards/waveshare_amoled_206/display.cpp.
+int16_t display_hal_active_width(void)  { return LCD_WIDTH;  }
+int16_t display_hal_active_height(void) { return LCD_HEIGHT; }
+bool    display_hal_consume_rotation_change(void) { return false; }
+
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2) {
     // Most QSPI AMOLED drivers expect even-aligned flush regions. Harmless
     // to apply on panels that don't strictly require it.

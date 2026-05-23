@@ -25,6 +25,8 @@ static UsageData usage = {};
 #define BUF_LINES 40
 static uint16_t* buf1 = nullptr;
 static uint16_t* buf2 = nullptr;
+static lv_display_t* lvgl_disp = nullptr;
+static uint32_t lvgl_buf_max_w = 0;  // largest LVGL width either orientation can use
 
 static uint32_t my_tick(void) { return millis(); }
 
@@ -111,8 +113,11 @@ static char cmd_buf[CMD_BUF_SIZE];
 static int cmd_pos = 0;
 
 static void send_screenshot() {
-    const uint32_t w = board_caps().width;
-    const uint32_t h = board_caps().height;
+    // Use the active (orientation-aware) dimensions so a rotated panel
+    // captures correctly. On square or fixed-orientation boards this is
+    // identical to board_caps().width/height.
+    const uint32_t w = (uint32_t)display_hal_active_width();
+    const uint32_t h = (uint32_t)display_hal_active_height();
     const uint32_t row_bytes = w * 2;
     const uint32_t buf_size = row_bytes * h;
     uint8_t* sbuf = (uint8_t*)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
@@ -176,21 +181,28 @@ void setup() {
     touch_hal_init();
 
     // ---- LVGL ----
-    const int W = board_caps().width;
-    const int H = board_caps().height;
+    // Use the orientation-aware active dimensions for the initial display
+    // resolution (equals native at boot — quadrant 0). Buffers are sized
+    // for max(native_w, native_h) so the partial-flush buffer stays valid
+    // after lv_display_set_resolution() swaps W and H on rotation.
+    const int W = display_hal_active_width();
+    const int H = display_hal_active_height();
+    const int NW = board_caps().width;
+    const int NH = board_caps().height;
+    lvgl_buf_max_w = (uint32_t)((NW > NH) ? NW : NH);
 
     lv_init();
     lv_tick_set_cb(my_tick);
 
-    buf1 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
-    buf2 = (uint16_t*)heap_caps_malloc(W * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
+    buf1 = (uint16_t*)heap_caps_malloc(lvgl_buf_max_w * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
+    buf2 = (uint16_t*)heap_caps_malloc(lvgl_buf_max_w * BUF_LINES * 2, MALLOC_CAP_SPIRAM);
 
-    lv_display_t* disp = lv_display_create(W, H);
-    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_flush_cb(disp, my_flush_cb);
-    lv_display_set_buffers(disp, buf1, buf2, W * BUF_LINES * 2,
+    lvgl_disp = lv_display_create(W, H);
+    lv_display_set_color_format(lvgl_disp, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_flush_cb(lvgl_disp, my_flush_cb);
+    lv_display_set_buffers(lvgl_disp, buf1, buf2, lvgl_buf_max_w * BUF_LINES * 2,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_add_event_cb(disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
+    lv_display_add_event_cb(lvgl_disp, rounder_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     lv_indev_t* indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
@@ -222,6 +234,18 @@ void loop() {
     // ticks while the panel is dark. A rotation that happens during sleep
     // is detected by the next tick after wake and ramped in then.
     if (!idle_is_asleep()) display_hal_tick();
+
+    // On a non-square rotation-enabled board, display_hal_tick() raises a
+    // one-shot flag when the IMU latches a new quadrant. Drain it here
+    // and resize the LVGL display + rebuild widgets so positions match
+    // the new W/H. On square panels (2.16) and fixed-orientation boards
+    // (1.8) this consume always returns false.
+    if (display_hal_consume_rotation_change()) {
+        int nw = display_hal_active_width();
+        int nh = display_hal_active_height();
+        lv_display_set_resolution(lvgl_disp, nw, nh);
+        ui_rebuild();
+    }
 
     // ---- Physical buttons ----
     //   PRIMARY   → HID Space  (Claude Code voice-mode PTT)

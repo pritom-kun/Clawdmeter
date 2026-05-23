@@ -37,3 +37,10 @@ void touch_hal_read(uint16_t* x, uint16_t* y, bool* pressed) {
     *y = touch_y;
     *pressed = touch_pressed;
 }
+
+void touch_hal_reset(void) {
+    touch_data_ready = false;
+    touch_pressed = false;
+    touch_x = 0;
+    touch_y = 0;
+}

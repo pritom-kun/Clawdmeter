@@ -15,3 +15,9 @@ void touch_hal_init(void);
 // whether any finger is currently down; coordinates are valid only when
 // pressed is true and are in display (post-orientation) coordinates.
 void touch_hal_read(uint16_t* x, uint16_t* y, bool* pressed);
+
+// Drop any latched press state. Called by ui_rebuild() across a rotation
+// transition so a finger held through the transition doesn't deliver
+// pre-rotation coordinates to post-rotation widgets. Implementations
+// should zero their internal pressed/x/y vars; no I2C traffic needed.
+void touch_hal_reset(void);

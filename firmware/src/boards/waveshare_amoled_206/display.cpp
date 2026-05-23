@@ -7,7 +7,9 @@
 #include <lvgl.h>
 
 // Render strip used when rotating in software. Sized to the largest LVGL
-// partial flush we ever do (max(LCD_W, LCD_H) × BUF_LINES, set in main.cpp).
+// partial flush we ever do (max(LCD_W, LCD_H) × BUF_LINES). Larger than
+// strictly necessary in portrait (where width=410); sized for landscape
+// so we don't reallocate on rotation.
 #define ROT_BUF_LINES 40
 static uint16_t* rot_buf = nullptr;
 
@@ -23,6 +25,7 @@ void display_hal_init(void) {
     bus = new Arduino_ESP32QSPI(
         LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
     // CO5300 constructor: (bus, rst, rotation, w, h, col_offset1..2, row_offset1..2)
+    // LCD_RESET is a direct GPIO on this board (no IO expander).
     gfx = new Arduino_CO5300(
         bus, LCD_RESET, 0 /* rotation handled in software */,
         LCD_WIDTH, LCD_HEIGHT, 0, 0, 0, 0);
@@ -48,12 +51,12 @@ void display_hal_fill_screen(uint16_t color) {
 }
 
 // Rotate a w×h strip into rot_buf and compute destination coordinates on
-// the native_w × native_h panel. (x_l, y_l) are LVGL coordinates (in the
-// current orientation); destination coords address the panel's physical
-// raster (always native_w × native_h regardless of rotation). Independent
-// native_w and native_h are required for non-square panels — on square
-// panels (W==H, as on the 2.16) the math collapses to the original
-// single-dimension form.
+// the native 410×502 panel. (x_l, y_l) are LVGL coordinates in the
+// *current* orientation: in landscape the LVGL canvas is 502×410, so
+// 0 ≤ x_l < 502 and 0 ≤ y_l < 410. Destination coordinates address the
+// physical raster (always 410×502 regardless of rotation). Independent
+// native_w and native_h are essential here — using a single S=W or S=H
+// (the 2.16's old pattern) would slice content off the panel.
 static void rotate_strip(const uint16_t* src, int32_t w, int32_t h,
                          int32_t sx, int32_t sy, uint8_t r,
                          int32_t* dx, int32_t* dy, int32_t* dw, int32_t* dh) {
@@ -110,12 +113,10 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
     gfx->draw16bitRGBBitmap(dx, dy, rot_buf, dw, dh);
 }
 
-// On rotation change, blank the panel and start the 4-step brightness ramp
-// back up over ~125 ms so the transition reads as deliberate. The actual
-// "tell LVGL the resolution changed and rebuild widgets" step happens in
-// main.cpp after it drains display_hal_consume_rotation_change() — that
-// way shared code owns the lifecycle and this file stays focused on the
-// panel-level work.
+// On rotation change, blank the panel and start the 4-step brightness
+// ramp back up over ~125 ms. The actual "tell LVGL the resolution
+// changed and rebuild widgets" step happens in main.cpp after it drains
+// display_hal_consume_rotation_change().
 void display_hal_tick(void) {
     static uint8_t  last_rotation = 0;
     static uint8_t  ramp_step = 0;     // 0=idle, 1..4=ramping
@@ -141,14 +142,18 @@ void display_hal_tick(void) {
     else                ramp_step++;
 }
 
-// Square panel: native_w == native_h, so active dims never change with
-// rotation. The accessor still returns native so shared code's contract
-// stays uniform across boards. consume_rotation_change drains the pending
-// flag; main.cpp uses it to trigger ui_rebuild (no-op visual cost on
-// square panels but keeps the per-rotation widget refresh consistent
-// with non-square boards).
-int16_t display_hal_active_width(void)  { return LCD_WIDTH;  }
-int16_t display_hal_active_height(void) { return LCD_HEIGHT; }
+// Non-square panel: active dims swap on quadrants 1 and 3. Quadrant 0
+// is native portrait (W=410, H=502), quadrant 1 is 90° CW (W=502, H=410),
+// quadrant 2 is 180° (W=410, H=502), quadrant 3 is 270° CW (W=502, H=410).
+int16_t display_hal_active_width(void) {
+    uint8_t r = imu_hal_rotation_quadrant();
+    return (r & 1) ? LCD_HEIGHT : LCD_WIDTH;
+}
+
+int16_t display_hal_active_height(void) {
+    uint8_t r = imu_hal_rotation_quadrant();
+    return (r & 1) ? LCD_WIDTH : LCD_HEIGHT;
+}
 
 bool display_hal_consume_rotation_change(void) {
     if (rotation_change_pending) {

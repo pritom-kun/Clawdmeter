@@ -91,6 +91,26 @@ Optional:
    doesn't match an existing breakpoint, you may want to add one to
    `compute_layout()` in `firmware/src/ui.cpp`.
 
+## Non-square panel with rotation
+
+If your panel is rectangular *and* you set `BOARD_HAS_ROTATION=1`, you
+need to implement three extra display HAL functions instead of letting
+the template's stubs stand:
+
+- `display_hal_active_width()` / `_active_height()` — must swap on
+  quadrants 1 and 3 so shared code can resize the LVGL display when the
+  user rotates between portrait and landscape. The 2.06 port's
+  `display.cpp` is the worked example.
+- `display_hal_consume_rotation_change()` — must drain a one-shot flag
+  raised inside `display_hal_tick` whenever the IMU latches a new
+  quadrant. Shared code (`main.cpp`) calls this every loop and reacts
+  by invoking `lv_display_set_resolution()` and `ui_rebuild()`.
+
+Your `rotate_strip()` math must also use `native_w` and `native_h`
+independently (not a single `S = LCD_WIDTH`) — see the 2.06's
+`display.cpp` and the rotate_strip comments in either CO5300 port. On a
+square panel the two reduce to the same number and the math collapses.
+
 ## Common pitfalls
 
 - **Display stays black, no panic.** Usually one of: OPI PSRAM not enabled

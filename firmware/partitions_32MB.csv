@@ -1,0 +1,9 @@
+# Partition table for 32 MB flash boards (AMOLED-2.06).
+# 4 MB OTA app slots × 2, plenty of SPIFFS, 64 KB coredump.
+# Name,     Type, SubType,  Offset,    Size,     Flags
+nvs,        data, nvs,      0x9000,    0x5000,
+otadata,    data, ota,      0xe000,    0x2000,
+app0,       app,  ota_0,    0x10000,   0x400000,
+app1,       app,  ota_1,    0x410000,  0x400000,
+spiffs,     data, spiffs,   0x810000,  0x17E0000,
+coredump,   data, coredump, 0x1FF0000, 0x10000,

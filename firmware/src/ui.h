@@ -10,6 +10,14 @@ enum screen_t {
 };
 
 void ui_init(void);
+
+// Tear down every widget on the active screen and rebuild them at the
+// current display_hal_active_width/height(). Used by main.cpp after a
+// rotation transition on non-square panels. State that survives the
+// rebuild: current screen, last BLE state, last battery sample, and
+// (via splash_get_animation_index) the active splash animation cell.
+void ui_rebuild(void);
+
 void ui_update(const UsageData* data);
 void ui_tick_anim(void);
 void ui_show_screen(screen_t screen);

@@ -98,13 +98,24 @@ static void show_placeholder() {
     if (label_status) lv_obj_clear_flag(label_status, LV_OBJ_FLAG_HIDDEN);
 }
 
-void splash_init(lv_obj_t *parent) {
-    const BoardCaps& c = board_caps();
-    int min_dim = (c.width < c.height) ? c.width : c.height;
+void splash_init(lv_obj_t *parent, int w, int h) {
+    // ui_rebuild() may have just called lv_obj_clean(scr), freeing every
+    // splash widget. Null our static pointers so any guard like
+    // `if (canvas) lv_obj_invalidate(canvas)` sees NULL instead of a
+    // dangling pointer until the lv_obj_create calls below reassign them.
+    splash_container = NULL;
+    canvas = NULL;
+    label_status = NULL;
+
+    int min_dim = (w < h) ? w : h;
     cell     = min_dim / GRID;       // fits within the smaller display dimension
     if (cell < 4) cell = 4;
     canvas_w = GRID * cell;
     canvas_h = GRID * cell;
+
+    // Idempotent: free any prior allocation so ui_rebuild() can reinit.
+    if (canvas_buf) { heap_caps_free(canvas_buf); canvas_buf = NULL; }
+    if (row_buf)    { heap_caps_free(row_buf);    row_buf    = NULL; }
 
     canvas_buf = (uint16_t*)heap_caps_malloc(canvas_w * canvas_h * 2, MALLOC_CAP_SPIRAM);
     row_buf    = (uint16_t*)heap_caps_malloc(canvas_w * 2,             MALLOC_CAP_SPIRAM);
@@ -114,7 +125,7 @@ void splash_init(lv_obj_t *parent) {
     }
 
     splash_container = lv_obj_create(parent);
-    lv_obj_set_size(splash_container, c.width, c.height);
+    lv_obj_set_size(splash_container, w, h);
     lv_obj_set_pos(splash_container, 0, 0);
     lv_obj_set_style_bg_color(splash_container, THEME_BG, 0);
     lv_obj_set_style_bg_opa(splash_container, LV_OPA_COVER, 0);
@@ -215,4 +226,19 @@ void splash_hide(void) {
 
 lv_obj_t* splash_get_root(void) {
     return splash_container;
+}
+
+int splash_get_animation_index(void) {
+    return (int)cur_anim;
+}
+
+void splash_set_animation_index(int idx) {
+    if (SPLASH_ANIM_COUNT == 0) return;
+    if (idx < 0 || idx >= SPLASH_ANIM_COUNT) return;
+    cur_anim = (uint16_t)idx;
+    cur_frame = 0;
+    frame_started_ms = millis();
+    last_pick_ms = frame_started_ms;
+    const splash_anim_def_t *a = &splash_anims[cur_anim];
+    render_frame(a->frames[0], a->palette);
 }

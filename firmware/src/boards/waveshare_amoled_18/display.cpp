@@ -44,6 +44,12 @@ void display_hal_tick(void) {
     // No rotation handling needed on this board.
 }
 
+// Rotation is disabled on this board; active dimensions are always native
+// and the rotation-change probe never fires.
+int16_t display_hal_active_width(void)  { return LCD_WIDTH;  }
+int16_t display_hal_active_height(void) { return LCD_HEIGHT; }
+bool    display_hal_consume_rotation_change(void) { return false; }
+
 // SH8601 driver doesn't strictly require even alignment in source, but the
 // rounder is harmless and keeps behavior consistent with the CO5300 port.
 void display_hal_round_area(int32_t* x1, int32_t* y1, int32_t* x2, int32_t* y2) {
