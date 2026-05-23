@@ -75,9 +75,11 @@ pio run -d firmware -e waveshare_amoled_18 -t upload --upload-port /dev/cu.usbmo
 pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0         # flash 2.16 on Linux
 ```
 
-If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio install) or `brew install platformio` on macOS.
+Windows uses `.\flash-windows.ps1` (auto-detects the COM port via `Get-PnpDevice`); or `pio run -d firmware -e <env> -t upload --upload-port COM7`.
 
-Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux. Both expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
+If `pio` isn't on PATH: try `~/.platformio/penv/bin/pio` (Linux/macOS pio install), `%USERPROFILE%\.platformio\penv\Scripts\pio.exe` on Windows, or `brew install platformio` on macOS.
+
+Device path differs by OS: `/dev/cu.usbmodem*` on macOS, `/dev/ttyACM0` on Linux, `COMx` on Windows. All three expose the ESP32-S3 native USB-JTAG (no boot-mode dance needed).
 
 ## QA your own UI changes — don't ask the user
 

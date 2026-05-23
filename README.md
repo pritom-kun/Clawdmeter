@@ -39,10 +39,11 @@ Plus per board:
 
 ## Prerequisites
 
-- Linux (tested on Ubuntu) or macOS
+- Linux (tested on Ubuntu), macOS, or Windows 10/11
 - [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
 - Linux: `curl`, `bluetoothctl`, `busctl` (BlueZ Bluetooth stack)
 - macOS: `python3` (the installer sets up a venv with `bleak` and `httpx`)
+- Windows: `python` 3.10+ on PATH and PowerShell 5.1+ (the installer sets up a venv with `bleak` and `httpx`)
 - Claude Code with an active subscription
 
 ## macOS installation
@@ -115,6 +116,58 @@ systemctl --user start claude-usage-daemon
 Check status: `systemctl --user status claude-usage-daemon`
 
 View logs: `journalctl --user -u claude-usage-daemon -f`
+
+## Windows installation
+
+The Windows host pieces share the cross-platform Python daemon with macOS but
+use a Startup-folder shortcut instead of LaunchAgents. Run the PowerShell
+scripts from the repo root.
+
+### Flash the firmware
+
+```powershell
+.\flash-windows.ps1                              # auto-detects the ESP32-S3 COM port
+.\flash-windows.ps1 COM7                         # or pass an explicit port
+.\flash-windows.ps1 -Env waveshare_amoled_18     # different board
+```
+
+### Pair the device
+
+Windows requires an OS-level pairing before `bleak` can connect (unlike macOS,
+which can pair on first connect).
+
+1. Power on the device.
+2. **Settings → Bluetooth & devices → Add device → Bluetooth**.
+3. Pick **"Claude Controller"** and confirm pairing.
+
+The MAC address is also shown on the device's Bluetooth screen — press the
+middle (PWR) button to cycle to it.
+
+### Install the daemon
+
+The daemon reads your Claude OAuth token from
+`%USERPROFILE%\.claude\.credentials.json`, polls usage every 60 s, and pushes
+it to the display over BLE.
+
+```powershell
+.\install-windows.ps1
+```
+
+The installer creates a Python venv in `daemon\.venv\`, installs `bleak` and
+`httpx`, renders a launcher wrapper at `daemon\start-daemon.cmd`, drops a
+shortcut into your Startup folder so the daemon comes up at every login, and
+launches it once immediately. Logs go to
+`%APPDATA%\claude-usage-monitor\daemon.log`.
+
+Useful commands (PowerShell):
+
+```powershell
+Get-Process pythonw                                                              # check it's running
+Get-Content -Wait "$env:APPDATA\claude-usage-monitor\daemon.log"                 # live logs
+Stop-Process -Name pythonw -Force                                                # stop
+& "$PWD\daemon\start-daemon.cmd"                                                 # start again
+Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Clawdmeter Daemon.lnk"  # disable autostart
+```
 
 ## How it works
 

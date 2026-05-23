@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
+"""Claude Usage Tracker Daemon (BLE) — cross-platform Python daemon.
 
 Polls Claude API rate-limit headers and writes a JSON payload to the
 ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
-bleak (CoreBluetooth backend on macOS).
+bleak, which picks the right BLE backend per OS (CoreBluetooth on
+macOS, WinRT on Windows, BlueZ on Linux). This is the macOS + Windows
+host daemon; Linux ships the bash variant (claude-usage-daemon.sh) by
+default but can run this too.
 """
 
 import asyncio
@@ -32,6 +35,8 @@ SCAN_TIMEOUT = 8.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
 # Linux: token lives in ~/.claude/.credentials.json.
+# Windows: token lives in %USERPROFILE%\.claude\.credentials.json
+# (same Path.home() resolution as Linux).
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
@@ -295,7 +300,7 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, _stop)
 
-    log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
+    log("=== Claude Usage Tracker Daemon (BLE) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
 
     backoff = 1

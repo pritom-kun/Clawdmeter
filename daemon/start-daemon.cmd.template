@@ -1,0 +1,6 @@
+@echo off
+REM Clawdmeter daemon launcher (rendered from start-daemon.cmd.template by
+REM install-windows.ps1). Launches pythonw.exe windowless and detaches so
+REM the Startup-folder shortcut can fire and forget at login.
+if not exist "%APPDATA%\claude-usage-monitor" mkdir "%APPDATA%\claude-usage-monitor"
+start "" /B "__VENV_PYTHONW__" "__DAEMON_PATH__" >> "%APPDATA%\claude-usage-monitor\daemon.log" 2>&1
