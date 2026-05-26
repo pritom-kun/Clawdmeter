@@ -178,13 +178,13 @@ $xmlTemplate = @'
 </Task>
 '@
 
-$xml = $xmlTemplate `
-    -replace '__USERID__',   $userId `
-    -replace '__PYTHONW__',  $PythonwBin `
-    -replace '__DAEMON__',   $DaemonPy `
-    -replace '__LOGOUT__',   $LogOut `
-    -replace '__LOGERR__',   $LogErr `
-    -replace '__REPODIR__',  $RepoDir
+$xml = $xmlTemplate
+$xml = $xml.Replace('__USERID__',   $userId)
+$xml = $xml.Replace('__PYTHONW__',  $PythonwBin)
+$xml = $xml.Replace('__DAEMON__',   $DaemonPy)
+$xml = $xml.Replace('__LOGOUT__',   $LogOut)
+$xml = $xml.Replace('__LOGERR__',   $LogErr)
+$xml = $xml.Replace('__REPODIR__',  $RepoDir)
 
 Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force | Out-Null
 
@@ -199,16 +199,19 @@ Write-Host "  Pairing once in Settings is required for reliable WinRT GATT acces
 Write-Host ""
 
 if (-not $SkipPrimeRun) {
-    Write-Host "Press Enter to run a 10-second test scan now (Ctrl+C to skip)."
-    Read-Host | Out-Null
-    Write-Host "  Running daemon in foreground -- press Ctrl+C to stop after you see 'Scanning...'."
-    try {
-        & $PythonBin $DaemonPy
-    } catch {
-        # Ctrl+C or other interrupt -- continue
+    Write-Host "Run a 10-second test scan now? [Y/n] " -NoNewline
+    $ans = Read-Host
+    if ($ans -notmatch '^[Nn]') {
+        Write-Host "  Starting foreground scan. Press Ctrl+C when you've seen 'Scanning...' and the device get discovered."
+        try {
+            Start-Process -FilePath $PythonBin -ArgumentList "`"$DaemonPy`"" -NoNewWindow -Wait
+        } catch {
+            # Start-Process can throw if the process can't start; carry on.
+            Write-Host "  Priming run skipped: $_"
+        }
     }
 } else {
-    Write-Host "(Skipping priming run; use Start-ScheduledTask manually to test.)"
+    Write-Host "  Skipping priming run (-SkipPrimeRun). Use Start-ScheduledTask to test once paired."
 }
 
 Write-Host ""
