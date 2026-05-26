@@ -473,12 +473,16 @@ void ui_tick_anim(void) {
 
     uint32_t now = lv_tick_get();
 
-    if (now - anim_msg_start >= ANIM_MSG_MS) {
+    const bool slow = board_caps().slow_refresh;
+    const uint32_t msg_interval     = slow ? 8000 : ANIM_MSG_MS;
+    const uint32_t spinner_interval = slow ? 4000 : spinner_ms[anim_spinner_idx];
+
+    if (now - anim_msg_start >= msg_interval) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
         anim_msg_start = now;
     }
 
-    if (now - anim_last_ms >= spinner_ms[anim_spinner_idx]) {
+    if (now - anim_last_ms >= spinner_interval) {
         anim_last_ms = now;
         anim_phase = (anim_phase + 1) % SPINNER_PHASES;
         anim_spinner_idx = (anim_phase < SPINNER_COUNT) ? anim_phase

@@ -23,6 +23,7 @@ Keep the two in sync. The pattern in `caps.cpp` does this for you:
 | `BOARD_HAS_IMU`                | 0       | Whether the accelerometer is populated and initialized. Distinct from `BOARD_HAS_ROTATION` — the AMOLED-1.8 has the QMI8658 (so `HAS_IMU=1`) but the kit's enclosure mounts the panel at a fixed orientation, so rotation is off. |
 | `BOARD_HAS_BATTERY`            | 0       | Whether PMU battery measurement is meaningful on this board. UI hides the battery indicator when false. |
 | `BOARD_HAS_IO_EXPANDER`        | 0       | Whether an IO expander gates display / touch reset lines. Doesn't directly gate any code path — but signals to the porter that `board_init()` must release the expander before `display_hal_init()`. |
+| `BoardCaps::slow_refresh` (runtime only — no `BOARD_HAS_*` macro) | `false` | E-paper / partial-refresh panels. When true, `ui_tick_anim` in `ui.cpp` and `splash_tick` in `splash.cpp` use 4 s / 8 s / 60 s cadences instead of the AMOLED ~130 ms spinner and ~100–300 ms splash frames, so the panel isn't thrashed at refresh rates it can't sustain. Also instructs `main.cpp`'s PWR-on-splash handler to dismiss the splash (`ui_show_screen(SCREEN_USAGE)`) rather than cycle animations — splash dismissal via touch tap is unavailable when the board has no touch controller. |
 
 ## Build-flag macros
 

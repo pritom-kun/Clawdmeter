@@ -168,15 +168,18 @@ void splash_init(lv_obj_t *parent) {
 void splash_tick(void) {
     if (!active || SPLASH_ANIM_COUNT == 0) return;
 
+    const bool slow = board_caps().slow_refresh;
+    const uint32_t rotate_ms = slow ? 60000 : SPLASH_ROTATE_INTERVAL_MS;
+
     // Auto-rotate to the next animation in the current group.
-    if (millis() - last_pick_ms >= SPLASH_ROTATE_INTERVAL_MS) {
+    if (millis() - last_pick_ms >= rotate_ms) {
         splash_pick_for_current_rate();
     }
 
     const splash_anim_def_t *a = &splash_anims[cur_anim];
     if (a->frame_count == 0) return;
 
-    uint16_t hold = a->holds[cur_frame];
+    uint16_t hold = slow ? 4000 : a->holds[cur_frame];
     if (millis() - frame_started_ms >= hold) {
         cur_frame = (cur_frame + 1) % a->frame_count;
         frame_started_ms = millis();

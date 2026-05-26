@@ -18,6 +18,7 @@ struct BoardCaps {
     bool    has_rotation;    // IMU-driven CPU rotation in the flush callback
     bool    has_battery;     // AXP2101 battery measurement is meaningful
     bool    has_imu;         // QMI8658 (or compatible) is populated
+    bool    slow_refresh;    // e-paper / partial-refresh panels — slows clock-driven UI animations to match panel refresh budget
 };
 
 const BoardCaps& board_caps(void);

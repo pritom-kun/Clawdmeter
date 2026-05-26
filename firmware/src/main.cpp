@@ -280,8 +280,13 @@ void loop() {
 
         if (power_hal_pwr_pressed()) {
             if (!idle_consume_wake_press()) {
-                if (ui_get_current_screen() == SCREEN_SPLASH) splash_next();
-                else                                          ui_cycle_screen();
+                if (ui_get_current_screen() == SCREEN_SPLASH) {
+                    // slow_refresh boards (e-paper) have no touch — PWR dismisses
+                    // splash for them. AMOLED keeps the cycle-animations behavior.
+                    if (board_caps().slow_refresh) ui_show_screen(SCREEN_USAGE);
+                    else                            splash_next();
+                }
+                else ui_cycle_screen();
             }
         }
     }
