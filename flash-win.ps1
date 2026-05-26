@@ -19,10 +19,10 @@ $ErrorActionPreference = 'Stop'
 # ── No board → print usage and list available envs ──────────────────────────
 if (-not $Board) {
     $iniPath = Join-Path $PSScriptRoot 'firmware\platformio.ini'
-    $matches = Select-String -Path $iniPath -Pattern '^\[env:(.+)\]'
+    $envMatches = Select-String -Path $iniPath -Pattern '^\[env:(.+)\]'
     Write-Host "Usage: .\flash-win.ps1 <board> [COMport]"
     Write-Host "Available boards:"
-    foreach ($m in $matches) {
+    foreach ($m in $envMatches) {
         $envName = $m.Matches[0].Groups[1].Value
         Write-Host "  $envName"
     }
@@ -57,7 +57,7 @@ if (-not $Port) {
     }
 
     if ($null -eq $comNumber) {
-        # Fall back to first USB-serial bridge (CP210x, Silicon Labs, generic USB serial)
+        # Fallback: any USB-serial bridge. WMI is faster than `pio device list` and avoids invoking pio twice.
         $usbDevices = Get-CimInstance Win32_PnPEntity -Filter "Caption LIKE '%(COM%'" |
             Where-Object { $_.Caption -match '(USB|Silicon Labs|CP210)' }
 
@@ -89,14 +89,15 @@ Write-Host ""
 Push-Location (Join-Path $PSScriptRoot 'firmware')
 try {
     & $pioExe run -e $Board -t upload --upload-port $Port
-    if ($LASTEXITCODE -ne 0) {
-        throw "pio exited with code $LASTEXITCODE"
-    }
+    $pioExit = $LASTEXITCODE
 } finally {
     Pop-Location
+}
+if ($pioExit -ne 0) {
+    exit $pioExit
 }
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "=== Done! ==="
+Write-Host "=== Done ==="
 Write-Host "To watch serial output: pio device monitor -p $Port -b 115200"
