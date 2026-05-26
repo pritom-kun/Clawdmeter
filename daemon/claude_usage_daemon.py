@@ -31,9 +31,8 @@ TICK = 5
 SCAN_TIMEOUT = 8.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
-# Linux: token lives in ~/.claude/.credentials.json.
-# darwin only — read via `security find-generic-password`
-KEYCHAIN_SERVICE = "Claude Code-credentials"
+# Linux/Windows: token lives in ~/.claude/.credentials.json.
+KEYCHAIN_SERVICE = "Claude Code-credentials"  # darwin only — read via `security find-generic-password`
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 

@@ -137,8 +137,8 @@ the available envs (scraped from `firmware\platformio.ini`).
 
 If PowerShell blocks the script, run once per shell session:
 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`. If you
-downloaded the scripts via a browser, `Unblock-File .\flash-win.ps1`
-removes the Mark-of-the-Web flag.
+downloaded the scripts via a browser, `Get-ChildItem *.ps1 | Unblock-File`
+removes the Mark-of-the-Web flag from both PowerShell scripts.
 
 ### Pair the device
 
@@ -165,7 +165,7 @@ BLE.
 
 The installer creates a Python venv in `daemon\.venv\`, installs `bleak`
 and `httpx`, registers a Scheduled Task named "Clawdmeter Daemon" that
-runs at user logon via `pythonw.exe` (no console window), and starts it.
+runs at user logon via `python.exe` (a console window may briefly appear at logon, then disappear once the daemon enters its polling loop), and starts it.
 Logs go to `%LOCALAPPDATA%\Clawdmeter\logs\`. Pass `-SkipPrimeRun` to
 skip the optional foreground priming scan.
 
