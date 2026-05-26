@@ -37,10 +37,11 @@ Boards supported out of the box:
 
 ## Prerequisites
 
-- Linux (tested on Ubuntu) or macOS
+- Linux (tested on Ubuntu), macOS, or Windows 11
 - [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html)
 - Linux: `curl`, `bluetoothctl`, `busctl` (BlueZ Bluetooth stack)
 - macOS: `python3` (the installer sets up a venv with `bleak` and `httpx`)
+- Windows: Python 3.10+ (python.org installer with "Add to PATH"); the installer sets up a venv with `bleak` and `httpx`
 - Claude Code with an active subscription
 
 ## macOS installation
@@ -118,9 +119,70 @@ Check status: `systemctl --user status claude-usage-daemon`
 
 View logs: `journalctl --user -u claude-usage-daemon -f`
 
+## Windows installation
+
+Tested on Windows 11 with PowerShell 5.1 and PowerShell 7. The Python
+daemon runs as a per-user Scheduled Task at logon and talks to the device
+via WinRT Bluetooth Low Energy.
+
+### Flash the firmware
+
+```powershell
+.\flash-win.ps1 waveshare_amoled_216           # auto-detects the ESP32 COM port
+.\flash-win.ps1 waveshare_amoled_18  COM7      # or pass an explicit COM port
+```
+
+The board env name is required. Run `.\flash-win.ps1` with no args to see
+the available envs (scraped from `firmware\platformio.ini`).
+
+If PowerShell blocks the script, run once per shell session:
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`. If you
+downloaded the scripts via a browser, `Unblock-File .\flash-win.ps1`
+removes the Mark-of-the-Web flag.
+
+### Pair the device
+
+After flashing, open **Settings → Bluetooth & devices → Add device →
+Bluetooth** and pick "Claude Controller". No PIN required (JustWorks
+pairing). Pairing once in Settings is required for reliable WinRT GATT
+access from the daemon.
+
+The board exposes one pairing but two BLE profiles (a custom data
+service plus an HID keyboard for the Space and Shift+Tab buttons), so
+Windows may show a one-time "Setting up Bluetooth keyboard" toast — that
+is the second profile auto-enrolling, not a separate device.
+
+### Install the daemon
+
+The daemon reads your Claude OAuth token from
+`%USERPROFILE%\.claude\.credentials.json` (where Claude Code stores it
+on Windows), polls usage every 60 s, and pushes it to the display over
+BLE.
+
+```powershell
+.\install-win.ps1
+```
+
+The installer creates a Python venv in `daemon\.venv\`, installs `bleak`
+and `httpx`, registers a Scheduled Task named "Clawdmeter Daemon" that
+runs at user logon via `pythonw.exe` (no console window), and starts it.
+Logs go to `%LOCALAPPDATA%\Clawdmeter\logs\`. Pass `-SkipPrimeRun` to
+skip the optional foreground priming scan.
+
+### Manage the task
+
+```powershell
+Get-ScheduledTask     -TaskName 'Clawdmeter Daemon'        # check it's registered
+Get-ScheduledTaskInfo -TaskName 'Clawdmeter Daemon'        # last run time / result
+Get-Content "$env:LOCALAPPDATA\Clawdmeter\logs\claude-usage-daemon.out.log" -Wait   # live logs
+Stop-ScheduledTask    -TaskName 'Clawdmeter Daemon'        # stop
+Start-ScheduledTask   -TaskName 'Clawdmeter Daemon'        # start
+Unregister-ScheduledTask -TaskName 'Clawdmeter Daemon' -Confirm:$false   # uninstall
+```
+
 ## How it works
 
-1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux.
+1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux and Windows.
 2. It makes a minimal API call to `api.anthropic.com/v1/messages` — one token of Haiku, basically free.
 3. The usage numbers come straight out of the response headers (`anthropic-ratelimit-unified-5h-utilization` and friends).
 4. The daemon connects to the ESP32 over BLE and writes a JSON payload to the GATT RX characteristic.
