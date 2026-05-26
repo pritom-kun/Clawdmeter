@@ -24,6 +24,16 @@ static uint32_t last_full_refresh_ms = 0;
 static uint32_t partial_count = 0;
 static int      dirty_x1 = 0, dirty_y1 = 0, dirty_x2 = 0, dirty_y2 = 0;
 
+// Threshold an RGB565 pixel to 1bpp (1=white, 0=black) via BT.601 luminance.
+// Coefficients (76, 150, 30) are Q8 approximations of 0.299/0.587/0.114.
+static inline bool rgb565_is_white(uint16_t p) {
+    uint8_t r = (p >> 11) & 0x1F;
+    uint8_t g = (p >>  5) & 0x3F;
+    uint8_t b =  p        & 0x1F;
+    uint16_t lum = (uint16_t)((r << 3) * 76 + (g << 2) * 150 + (b << 3) * 30);
+    return (lum >> 8) >= 128;
+}
+
 static inline void expand_dirty(int x, int y, int w, int h) {
     int x2 = x + w - 1;
     int y2 = y + h - 1;
@@ -58,12 +68,7 @@ void display_hal_set_brightness(uint8_t level) {
 
 void display_hal_fill_screen(uint16_t color565) {
     if (!framebuf) return;
-    // Threshold 565 to 1bpp via approximate luminance.
-    uint8_t r = (color565 >> 11) & 0x1F;
-    uint8_t g = (color565 >>  5) & 0x3F;
-    uint8_t b =  color565        & 0x1F;
-    uint16_t lum = (uint16_t)((r << 3) * 76 + (g << 2) * 150 + (b << 3) * 30);
-    memset(framebuf, (lum >> 8) >= 128 ? 0xFF : 0x00, FB_BYTES);
+    memset(framebuf, rgb565_is_white(color565) ? 0xFF : 0x00, FB_BYTES);
     expand_dirty(0, 0, LCD_WIDTH, LCD_HEIGHT);
     last_flush_ms = millis();
 }
@@ -77,15 +82,10 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
         for (int32_t col = 0; col < w; col++) {
             int32_t px = x + col;
             if (px < 0 || px >= LCD_WIDTH) continue;
-            uint16_t p = pixels[row * w + col];
-            uint8_t r = (p >> 11) & 0x1F;
-            uint8_t g = (p >>  5) & 0x3F;
-            uint8_t b =  p        & 0x1F;
-            uint16_t lum = (uint16_t)((r << 3) * 76 + (g << 2) * 150 + (b << 3) * 30);
             uint8_t bit  = 1 << (7 - (px & 7));
             uint8_t* byte = &framebuf[py * (LCD_WIDTH / 8) + (px >> 3)];
-            if ((lum >> 8) >= 128) *byte |=  bit;   // white
-            else                   *byte &= ~bit;   // black
+            if (rgb565_is_white(pixels[row * w + col])) *byte |=  bit;
+            else                                         *byte &= ~bit;
         }
     }
     expand_dirty(x, y, w, h);
