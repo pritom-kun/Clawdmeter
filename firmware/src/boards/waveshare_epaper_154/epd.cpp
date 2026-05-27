@@ -14,15 +14,15 @@ static SPIClass         spi_bus(FSPI);
 static SPISettings      spi_cfg(4000000, MSBFIRST, SPI_MODE0);
 
 // ---------------------------------------------------------------------------
-// Waveform LUT for the Waveshare 1.54" V2 SSD1681 panel
+// Waveform LUTs for the Waveshare 1.54" V2 SSD1681 panel
 // ---------------------------------------------------------------------------
+// Both arrays are 159 bytes: the first 153 go to cmd 0x32; the remaining
+// 6 are trailer settings for cmds 0x3F, 0x03, 0x04 (3 bytes), and 0x2C.
 // Sourced verbatim from waveshareteam/ESP32-S3-ePaper-1.54
 // (02_Example/Arduino/07_BATT_PWR_Test/src/display/epaper_driver_bsp.cpp,
-//  symbol WF_Full_1IN54). Loading this explicitly is mandatory: the chip's
-// OTP LUT is unreliable on this panel revision — refreshes against it
-// produce salt-and-pepper noise instead of clean B/W output. The first
-// 153 bytes go to cmd 0x32; the remaining 6 are trailer settings for
-// cmds 0x3F, 0x03, 0x04 (3 bytes), and 0x2C.
+// symbols WF_Full_1IN54 and WF_PARTIAL_1IN54_0). Loading the panel-
+// specific LUT explicitly is mandatory — the chip's OTP LUT is
+// unreliable on this revision.
 static const uint8_t WF_FULL[159] = {
     0x80,0x48,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x40,0x48,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -43,6 +43,28 @@ static const uint8_t WF_FULL[159] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,
     0x22,0x22,0x22,0x22,0x22,0x22,0x00,0x00,0x00,
     0x22,0x17,0x41,0x00,0x32,0x20
+};
+
+static const uint8_t WF_PARTIAL[159] = {
+    0x00,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x80,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x40,0x40,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x0F,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x01,0x01,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x22,0x22,0x22,0x22,0x22,0x22,0x00,0x00,0x00,
+    0x02,0x17,0x41,0xB0,0x32,0x28
 };
 
 // ---------------------------------------------------------------------------
@@ -117,7 +139,7 @@ static void set_cursor_px(uint16_t x_px, uint16_t y_px) {
     write_data((y_px >> 8) & 0xFF);
 }
 
-// Load the panel-specific waveform LUT. Mirrors reference's EPD_SetLut:
+// Load a 159-byte waveform LUT. Mirrors reference's EPD_SetLut:
 // 153 bytes via cmd 0x32, then 6 trailer bytes to cmds 0x3F, 0x03,
 // 0x04 (×3), 0x2C.
 static void load_lut(const uint8_t* lut) {
@@ -131,55 +153,54 @@ static void load_lut(const uint8_t* lut) {
     write_cmd(0x2C); write_data(lut[158]);
 }
 
+// Drive the panel reset pin with the timing the Waveshare reference
+// uses for both EPD_Init and EPD_Init_Partial: HIGH 50 / LOW 20 /
+// HIGH 50 ms, then wait for BUSY to clear.
+static void hardware_reset(void) {
+    digitalWrite(EPD_RST, HIGH); delay(50);
+    digitalWrite(EPD_RST, LOW);  delay(20);
+    digitalWrite(EPD_RST, HIGH); delay(50);
+    wait_busy();
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 void epd_init(void) {
-    // Enable the panel's onboard regulator FIRST (active-LOW). Without
-    // this the SSD1681 has no Vcc and silently swallows all SPI traffic.
+    // First-call setup: enable regulator + bring up SPI + configure pins.
+    // On re-entry (e.g. after epd_init_partial when display_hal_tick wants
+    // to do a full refresh again) these are idempotent and cheap.
     pinMode(EPD_PWR, OUTPUT);
-    digitalWrite(EPD_PWR, LOW);
-    delay(10);   // let Vcc settle before clocking SCLK/CS
+    digitalWrite(EPD_PWR, LOW);   // active-LOW: drive LOW to enable
+    delay(10);                    // let Vcc settle before clocking SCLK/CS
 
-    // Bring up SPI bus (MISO unused — SSD1681 is write-only).
     spi_bus.begin(EPD_SCLK, /*MISO=*/-1, EPD_MOSI, /*SS=*/-1);
 
-    // Configure control pins.
     pinMode(EPD_CS,   OUTPUT);  digitalWrite(EPD_CS,   HIGH);
     pinMode(EPD_DC,   OUTPUT);  digitalWrite(EPD_DC,   HIGH);
     pinMode(EPD_RST,  OUTPUT);  digitalWrite(EPD_RST,  HIGH);
     pinMode(EPD_BUSY, INPUT);
 
-    // Hardware reset, timing matches reference's EPD_Init exactly.
-    digitalWrite(EPD_RST, HIGH); delay(50);
-    digitalWrite(EPD_RST, LOW);  delay(20);
-    digitalWrite(EPD_RST, HIGH); delay(50);
-    wait_busy();
+    hardware_reset();
 
     write_cmd(0x12);             // SW reset
     wait_busy();
 
     // Driver output control — A[8:0]=LCD_HEIGHT-1, B[2:0]=0x01 (TB=1).
-    // Reference: EPD_SendData(0xC7); EPD_SendData(0x00); EPD_SendData(0x01);
     write_cmd(0x01);
     write_data((LCD_HEIGHT - 1) & 0xFF);
     write_data(((LCD_HEIGHT - 1) >> 8) & 0xFF);
     write_data(0x01);
 
-    // Data entry mode 0x01: X+ increment, Y- decrement, X-major. Combined
-    // with set_window_px(0, Height-1, Width-1, 0) and set_cursor_px(0,
-    // Height-1) below, this yields a RAM walk equivalent to top-down
-    // physical scan when TB=1 (the gate-driver direction matches the Y-
-    // decrement). Matches the reference call sequence verbatim.
+    // Data entry mode 0x01: X+ increment, Y- decrement, X-major.
     write_cmd(0x11);
     write_data(0x01);
 
     // Reference: EPD_SetWindows(0, Width-1, Height-1, 0)
-    //   (Xstart=0, Ystart=Height-1, Xend=Width-1, Yend=0)
     set_window_px(0, LCD_HEIGHT - 1, LCD_WIDTH - 1, 0);
 
-    // Border waveform — reference value (0x01, not 0x05 like our old code).
+    // Border waveform — reference value for full-refresh init.
     write_cmd(0x3C);
     write_data(0x01);
 
@@ -197,23 +218,58 @@ void epd_init(void) {
     set_cursor_px(0, LCD_HEIGHT - 1);
     wait_busy();
 
-    // Explicitly load the panel-specific full-refresh LUT. The OTP LUT
-    // is unreliable on this revision — without this step the panel
-    // renders salt-and-pepper noise.
+    // Explicitly load the panel-specific full-refresh LUT.
     load_lut(WF_FULL);
+}
+
+void epd_init_partial(void) {
+    // Reference's EPD_Init_Partial runs its own reset + LUT load sequence
+    // and finishes with a 0x22 0xC0 + 0x20 master activation that puts
+    // the SSD1681 into partial-display-mode-ready state. After this call
+    // the chip will respond to cmd 0x22 0xCF as a partial refresh against
+    // its current "previous" RAM (cmd 0x26) baseline.
+    hardware_reset();
+
+    load_lut(WF_PARTIAL);
+
+    // 10-byte 0x37 parameters — opaque, vendored verbatim from reference.
+    write_cmd(0x37);
+    write_data(0x00); write_data(0x00); write_data(0x00); write_data(0x00); write_data(0x00);
+    write_data(0x40); write_data(0x00); write_data(0x00); write_data(0x00); write_data(0x00);
+
+    // Partial-mode border waveform.
+    write_cmd(0x3C);
+    write_data(0x80);
+
+    // Display update control 2 with 0xC0 + master activation: enables
+    // clock+analog, sets up partial mode, then disables — leaves the
+    // chip ready for cmd 0x22 0xCF triggered refreshes.
+    write_cmd(0x22);
+    write_data(0xC0);
+    write_cmd(0x20);
+    wait_busy();
 }
 
 void epd_full_refresh(const uint8_t* framebuf) {
     set_window_px(0, LCD_HEIGHT - 1, LCD_WIDTH - 1, 0);
     set_cursor_px(0, LCD_HEIGHT - 1);
 
-    write_cmd(0x24);                // write B/W RAM
+    // Write to B/W RAM (cmd 0x24) — the visible buffer.
+    write_cmd(0x24);
     write_data_n(framebuf, FB_BYTES);
 
-    // Display update control 2 = 0xC7: enable clock + enable analog +
-    // display mode 1 + disable analog + disable clock. NO "load LUT"
-    // bit — the LUT was loaded in epd_init() and persists. Matches
-    // reference's EPD_TurnOnDisplay verbatim.
+    // Also seed the "previous" RAM (cmd 0x26) with the same image. The
+    // SSD1681 uses 0x26 as the diff baseline for subsequent partial
+    // refreshes (mirrors the reference's EPD_DisplayPartBaseImage). For
+    // a pure full refresh this is a small waste of SPI time but ensures
+    // partial mode can take over cleanly immediately afterward.
+    set_cursor_px(0, LCD_HEIGHT - 1);
+    write_cmd(0x26);
+    write_data_n(framebuf, FB_BYTES);
+
+    // Display update control 2 = 0xC7: clock+analog+display(mode 1)
+    // +disable. No "load LUT" bit — the LUT was loaded in epd_init()
+    // and persists. Matches reference's EPD_TurnOnDisplay.
     write_cmd(0x22);
     write_data(0xC7);
     write_cmd(0x20);
@@ -222,15 +278,25 @@ void epd_full_refresh(const uint8_t* framebuf) {
 
 void epd_partial_refresh(const uint8_t* framebuf,
                          int x1, int y1, int x2, int y2) {
-    // Partial refresh needs its own LUT (WF_PARTIAL_1IN54_0 in the
-    // reference) plus a different 0x37/0x3C/0x22 setup pass. We have
-    // the LUT bytes documented but haven't wired up the partial path
-    // yet — for now, fall back to a full refresh so output is always
-    // clean. Cost: ~1.5 s + a visible flicker per call. The dirty-
-    // rectangle args are unused in this path; the full framebuffer
-    // is sent.
+    // The SSD1681 computes the diff against cmd-0x26 RAM internally, so
+    // we send the full framebuffer regardless of the caller's dirty
+    // rect. Keeping the bounds args for API symmetry / future use.
     (void)x1; (void)y1; (void)x2; (void)y2;
-    epd_full_refresh(framebuf);
+
+    set_window_px(0, LCD_HEIGHT - 1, LCD_WIDTH - 1, 0);
+    set_cursor_px(0, LCD_HEIGHT - 1);
+
+    write_cmd(0x24);
+    write_data_n(framebuf, FB_BYTES);
+
+    // Display update control 2 = 0xCF: clock+analog+display(mode 2 /
+    // partial)+disable. Requires epd_init_partial to have set up the
+    // partial LUT and the 0x37 parameters since the last reset.
+    // Matches reference's EPD_TurnOnDisplayPart.
+    write_cmd(0x22);
+    write_data(0xCF);
+    write_cmd(0x20);
+    wait_busy();
 }
 
 void epd_deep_sleep(void) {

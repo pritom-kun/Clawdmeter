@@ -24,6 +24,12 @@ static uint32_t last_full_refresh_ms = 0;
 static uint32_t partial_count = 0;
 static int      dirty_x1 = 0, dirty_y1 = 0, dirty_x2 = 0, dirty_y2 = 0;
 
+// Track whether the SSD1681 is currently in partial-refresh mode. Set
+// to true after epd_init_partial finishes, cleared when we decide it's
+// time for another ghost-clearing full refresh (and epd_init re-runs to
+// reload the full-refresh LUT).
+static bool partial_mode = false;
+
 // Threshold an RGB565 pixel to 1bpp (1=white, 0=black) via BT.601 luminance.
 // Coefficients (76, 150, 30) are Q8 approximations of 0.299/0.587/0.114.
 static inline bool rgb565_is_white(uint16_t p) {
@@ -57,8 +63,15 @@ void display_hal_init(void) {
 
 void display_hal_begin(void) {
     if (framebuf) {
+        // Boot full refresh: paints the panel all-white (framebuf was
+        // memset to 0xFF in display_hal_init) and seeds the previous
+        // RAM. Then switch the chip into partial mode so the first UI
+        // tick can do a fast partial refresh instead of a redundant
+        // second full refresh.
         epd_full_refresh(framebuf);
         last_full_refresh_ms = millis();
+        epd_init_partial();
+        partial_mode = true;
     }
 }
 
@@ -102,7 +115,9 @@ void display_hal_tick(void) {
     if (!dirty || !framebuf) return;
     if (millis() - last_flush_ms < SETTLE_MS) return;
 
-    // Clamp dirty region into panel bounds.
+    // Clamp dirty region into panel bounds (kept for SETTLE_MS coalescing
+    // and potential future per-region partial; the SSD1681 itself
+    // computes the diff internally for partial refreshes).
     if (dirty_x1 < 0) dirty_x1 = 0;
     if (dirty_y1 < 0) dirty_y1 = 0;
     if (dirty_x2 >= LCD_WIDTH)  dirty_x2 = LCD_WIDTH - 1;
@@ -112,8 +127,16 @@ void display_hal_tick(void) {
     bool time_for_full  = (now - last_full_refresh_ms) >= FULL_REFRESH_INTERVAL_MS;
     bool count_for_full = partial_count >= MAX_PARTIALS_BEFORE_FULL;
 
-    if (time_for_full || count_for_full) {
+    if (!partial_mode || time_for_full || count_for_full) {
+        // Cold start, ghost-clear cadence, or activity-burst safety
+        // override: redo a full refresh (loads full LUT + drives all
+        // pixels through the inversion sequence + seeds previous RAM)
+        // and then switch the chip back into partial mode for fast,
+        // flicker-free updates until the next full-refresh trigger.
+        epd_init();
         epd_full_refresh(framebuf);
+        epd_init_partial();
+        partial_mode = true;
         last_full_refresh_ms = now;
         partial_count = 0;
     } else {
