@@ -460,7 +460,14 @@ static void init_usage_screen(lv_obj_t* scr) {
     lbl_anim = lv_label_create(usage_container);
     lv_label_set_text(lbl_anim, "");
     lv_obj_set_style_text_font(lbl_anim, L.usage_anim_font, 0);
-    lv_obj_set_style_text_color(lbl_anim, COL_ACCENT, 0);
+    // Same trick as the reset label: COL_ACCENT (terra-cotta, luminance
+    // ~145) is too close to the 1bpp inversion threshold (128) for the
+    // anti-aliased glyph edges to survive cleanly, so the rotating
+    // message renders thinner and jaggier than the COL_TEXT-coloured
+    // pill/percentage labels above it. Promote to COL_TEXT on
+    // slow_refresh boards; AMOLEDs keep the accent colour.
+    lv_obj_set_style_text_color(lbl_anim,
+        board_caps().slow_refresh ? COL_TEXT : COL_ACCENT, 0);
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
     if (!L.show_anim) lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
 }
