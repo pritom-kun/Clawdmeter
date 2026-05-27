@@ -122,13 +122,23 @@ static void compute_layout(const BoardCaps& c) {
         // shrunk fonts, scaled icons, and tighter spacing so the whole
         // thing fits on a 200px-tall panel. ui_init applies
         // lv_image_set_scale to the logo (~37 %) and battery (~50 %).
+        //
+        // Vertical budget (200 px total):
+        //   y=0..30   top row: logo (30 px), title centred, battery (24 px)
+        //   y=34..98  panel 1 (Current) - 64 px
+        //   y=102..166 panel 2 (Weekly) - 64 px
+        //   y=170..200 footer: rotating animation message
         L.margin = 6;
         L.title_y = 8;
-        L.content_y = 40;
-        L.usage_panel_h = 72;
+        L.content_y = 34;
+        L.usage_panel_h = 64;
         L.usage_panel_gap = 4;
+        // Within each 64 px panel (1 px pad top+bottom, 62 px usable):
+        //   child y=0..28  pct (styrene_28, line_height 28)
+        //   child y=32..42 bar (10 px, 4 px gap above)
+        //   child y=46..62 reset (styrene_16, line_height 16, 4 px gap)
         L.usage_bar_y = 32;
-        L.usage_reset_y = 48;
+        L.usage_reset_y = 46;
         L.usage_bar_h = 10;
         L.usage_title_font = &font_styrene_16;
         L.usage_pct_font   = &font_styrene_28;
@@ -283,9 +293,10 @@ static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_set_style_radius(panel, 8, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
     // Tighter padding on the tiny tier so the pct + bar + reset all fit
-    // inside a ~70 px panel.
+    // inside a 64 px panel and the second panel doesn't push the
+    // bottom animation footer off-screen.
     const int hpad = (L.scr_h < 250) ? 6 : 16;
-    const int vpad = (L.scr_h < 250) ? 4 : 12;
+    const int vpad = (L.scr_h < 250) ? 1 : 12;
     lv_obj_set_style_pad_left(panel, hpad, 0);
     lv_obj_set_style_pad_right(panel, hpad, 0);
     lv_obj_set_style_pad_top(panel, vpad, 0);
@@ -405,9 +416,12 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_label_set_text(lbl_title, "Usage");
     lv_obj_set_style_text_font(lbl_title, L.usage_title_font, 0);
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
-    // On AMOLED the title is shifted +16 to clear the top-left logo
-    // overlay. The tiny tier hides the logo, so center the title cleanly.
-    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, L.show_logo ? 16 : 0, L.title_y);
+    // On AMOLED the title is shifted +16 to clear the 80×80 top-left
+    // logo overlay. On the tiny tier the logo is scaled to ~30 px and
+    // doesn't reach the title, so center cleanly.
+    const bool tiny_title = (L.scr_h < 250);
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID,
+                 (L.show_logo && !tiny_title) ? 16 : 0, L.title_y);
 
     make_usage_panel(usage_container, L.content_y, "Current",
                      &lbl_session_pct, &lbl_session_label,
