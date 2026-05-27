@@ -179,7 +179,12 @@ void splash_tick(void) {
     const splash_anim_def_t *a = &splash_anims[cur_anim];
     if (a->frame_count == 0) return;
 
-    uint16_t hold = slow ? 4000 : a->holds[cur_frame];
+    // 30 s per frame on slow_refresh boards. Lower values look snappier
+    // but every advance triggers a full-refresh on the e-paper (~1.5 s
+    // flicker, ~1 toward the panel's ~1 M-refresh budget), so 4 s wears
+    // the panel out in ~6 weeks of continuous splash. 30 s keeps a 24/7
+    // device inside spec for ~10 years.
+    uint16_t hold = slow ? 30000 : a->holds[cur_frame];
     if (millis() - frame_started_ms >= hold) {
         cur_frame = (cur_frame + 1) % a->frame_count;
         frame_started_ms = millis();

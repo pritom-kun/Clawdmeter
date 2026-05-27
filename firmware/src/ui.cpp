@@ -474,8 +474,12 @@ void ui_tick_anim(void) {
     uint32_t now = lv_tick_get();
 
     const bool slow = board_caps().slow_refresh;
-    const uint32_t msg_interval     = slow ? 8000 : ANIM_MSG_MS;
-    const uint32_t spinner_interval = slow ? 4000 : spinner_ms[anim_spinner_idx];
+    // On slow_refresh (e-paper) boards every animation tick triggers a
+    // full-refresh — ~1.5 s panel flicker and one refresh against the
+    // panel's ~1 M-refresh budget. 4 s/8 s wore out a continuously-active
+    // panel in ~45 days. 60 s keeps the device inside spec for ~5 years.
+    const uint32_t msg_interval     = slow ? 60000 : ANIM_MSG_MS;
+    const uint32_t spinner_interval = slow ? 60000 : spinner_ms[anim_spinner_idx];
 
     if (now - anim_msg_start >= msg_interval) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
