@@ -137,15 +137,15 @@ static void compute_layout(const BoardCaps& c) {
         //   y=102..166 panel 2 (Weekly) - 64 px
         //   y=170..200 footer: rotating animation message
         L.margin = 6;
-        // title_y=6 lines up the visible top of the "Usage" /
+        // title_y=4 lines up the visible top of the "Usage" /
         // "Bluetooth" header glyphs with the visible-content top of
         // the Claude logo and battery icons (both 0-based on this
-        // tier but have ~4-6 px of transparent padding at the top of
+        // tier but have a few px of transparent padding at the top of
         // their source bitmaps before the first painted pixel). The
-        // styrene_20 line-box at y=6 spans y=6..26 — visible glyphs
-        // start around y=8-9, matching where the icons' visible ink
+        // styrene_20 line-box at y=4 spans y=4..24 — visible glyphs
+        // start around y=6-7, matching where the icons' visible ink
         // begins.
-        L.title_y = 6;
+        L.title_y = 4;
         L.content_y = 34;
         L.usage_panel_h = 64;
         L.usage_panel_gap = 4;
