@@ -165,24 +165,19 @@ void epd_full_refresh(const uint8_t* framebuf) {
 
 void epd_partial_refresh(const uint8_t* framebuf,
                          int x1, int y1, int x2, int y2) {
-    // Convert pixel x-coordinates to byte-column coordinates.
-    int bx1 = x1 / 8;
-    int bx2 = x2 / 8;
-
-    set_window(bx1, y1, bx2, y2);
-    set_cursor(bx1, y1);
-
-    write_cmd(0x24);              // cmd 0x24 — write black/white RAM (partial region)
-    int row_bytes = bx2 - bx1 + 1;
-    for (int y = y1; y <= y2; y++) {
-        write_data_n(&framebuf[y * (LCD_WIDTH / 8) + bx1], row_bytes);
-    }
-
-    write_cmd(0x22);              // cmd 0x22 — display update control 2
-    write_data(0xFF);             //   0xFF = partial refresh sequence
-
-    write_cmd(0x20);              // cmd 0x20 — master activation
-    wait_busy();
+    // SSD1681 display update mode 2 (cmd 0x22 0xFF) requires a panel-
+    // specific 153-byte waveform LUT loaded via cmd 0x32 — without it
+    // pixels drift to random states and the panel renders as full-
+    // screen noise. Vendoring that LUT (it lives in the official
+    // Waveshare reference at
+    // https://github.com/waveshareteam/ESP32-S3-ePaper-1.54
+    // 07_BATT_PWR_Test/src/display/epaper_driver_bsp.cpp) is a polish
+    // item. Until then, fall back to a full refresh so output is
+    // always clean. Cost: ~1.5 s + a visible flicker per call. The
+    // dirty-rectangle args are unused in this path; we send the full
+    // framebuffer.
+    (void)x1; (void)y1; (void)x2; (void)y2;
+    epd_full_refresh(framebuf);
 }
 
 void epd_deep_sleep(void) {
