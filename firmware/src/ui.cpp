@@ -33,6 +33,8 @@ struct Layout {
     int16_t usage_bar_y;
     int16_t usage_reset_y;
     int16_t usage_bar_h;
+    int16_t panel_hpad;       // make_panel pad_left == pad_right
+    int16_t panel_vpad;       // make_panel pad_top  == pad_bottom
     const lv_font_t* usage_title_font;
     const lv_font_t* usage_pct_font;
     const lv_font_t* usage_pill_font;
@@ -75,6 +77,8 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 56;
         L.usage_reset_y = 94;
         L.usage_bar_h = 24;
+        L.panel_hpad = 16;
+        L.panel_vpad = 12;
         L.usage_title_font = &font_tiempos_56;
         L.usage_pct_font   = &font_styrene_48;
         L.usage_pill_font  = &font_styrene_28;
@@ -100,6 +104,8 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 48;
         L.usage_reset_y = 78;
         L.usage_bar_h = 24;
+        L.panel_hpad = 16;
+        L.panel_vpad = 12;
         L.usage_title_font = &font_tiempos_56;
         L.usage_pct_font   = &font_styrene_48;
         L.usage_pill_font  = &font_styrene_28;
@@ -140,6 +146,8 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_y = 32;
         L.usage_reset_y = 46;
         L.usage_bar_h = 10;
+        L.panel_hpad = 6;
+        L.panel_vpad = 1;
         L.usage_title_font = &font_styrene_16;
         L.usage_pct_font   = &font_styrene_28;
         L.usage_pill_font  = &font_styrene_14;
@@ -300,15 +308,12 @@ static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, 8, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
-    // Tighter padding on the tiny tier so the pct + bar + reset all fit
-    // inside a 64 px panel and the second panel doesn't push the
-    // bottom animation footer off-screen.
-    const int hpad = (L.scr_h < 250) ? 6 : 16;
-    const int vpad = (L.scr_h < 250) ? 1 : 12;
-    lv_obj_set_style_pad_left(panel, hpad, 0);
-    lv_obj_set_style_pad_right(panel, hpad, 0);
-    lv_obj_set_style_pad_top(panel, vpad, 0);
-    lv_obj_set_style_pad_bottom(panel, vpad, 0);
+    // Panel padding comes from the active tier (tiny tier uses tighter
+    // values so the pct + bar + reset fit inside a 64 px panel).
+    lv_obj_set_style_pad_left(panel, L.panel_hpad, 0);
+    lv_obj_set_style_pad_right(panel, L.panel_hpad, 0);
+    lv_obj_set_style_pad_top(panel, L.panel_vpad, 0);
+    lv_obj_set_style_pad_bottom(panel, L.panel_vpad, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(panel, LV_OBJ_FLAG_EVENT_BUBBLE);
     return panel;
@@ -401,12 +406,25 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
     *out_pill = make_pill(panel, pill_text);
     lv_obj_align(*out_pill, LV_ALIGN_TOP_RIGHT, 0, 1);
 
-    *out_bar = make_bar(panel, 0, L.usage_bar_y, L.content_w - 32, L.usage_bar_h);
+    // Bar fills the panel's full content width (panel total minus both
+    // sides' padding). The previous "- 32" was hardcoded for AMOLED
+    // padding (16+16) and left ~20 px of dead space on the right of
+    // the tiny tier (6+6 padding).
+    *out_bar = make_bar(panel, 0, L.usage_bar_y,
+                       L.content_w - 2 * L.panel_hpad, L.usage_bar_h);
 
     *out_reset = lv_label_create(panel);
     lv_label_set_text(*out_reset, "---");
     lv_obj_set_style_text_font(*out_reset, L.usage_reset_font, 0);
-    lv_obj_set_style_text_color(*out_reset, COL_DIM, 0);
+    // On slow_refresh boards the 1bpp inversion threshold eats most of
+    // COL_DIM's anti-aliased edge pixels (dim grey is too close to the
+    // 128 threshold), making the reset countdown render visibly thinner
+    // and more jagged than COL_TEXT-colored labels. Promote it to
+    // COL_TEXT on those boards so all the panel text has the same
+    // crispness — opacity-based hierarchy doesn't survive 1bpp anyway.
+    const bool dim_kills_glyph_edges = board_caps().slow_refresh;
+    lv_obj_set_style_text_color(*out_reset,
+                                dim_kills_glyph_edges ? COL_TEXT : COL_DIM, 0);
     lv_obj_set_pos(*out_reset, 0, L.usage_reset_y);
 }
 
