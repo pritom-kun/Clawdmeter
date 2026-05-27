@@ -117,26 +117,27 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_credit_2_font = &font_styrene_14;
     } else {
         // Tiny layout — tuned for 200x200 e-paper (Waveshare 1.54 V2).
-        // Aggressively trims fonts, hides the logo/animation/battery
-        // top-bar (overlapped the usage panels at this size and the SKU
-        // has no battery), and packs the two usage panels into the
-        // available height with room for the bar + reset countdown.
+        // Keeps every element from the AMOLED layout (logo, battery,
+        // both usage panels, rotating animation message) but with
+        // shrunk fonts, scaled icons, and tighter spacing so the whole
+        // thing fits on a 200px-tall panel. ui_init applies
+        // lv_image_set_scale to the logo (~37 %) and battery (~50 %).
         L.margin = 6;
-        L.title_y = 2;
-        L.content_y = 22;
-        L.usage_panel_h = 78;
+        L.title_y = 8;
+        L.content_y = 40;
+        L.usage_panel_h = 72;
         L.usage_panel_gap = 4;
         L.usage_bar_y = 32;
-        L.usage_reset_y = 50;
+        L.usage_reset_y = 48;
         L.usage_bar_h = 10;
         L.usage_title_font = &font_styrene_16;
         L.usage_pct_font   = &font_styrene_28;
         L.usage_pill_font  = &font_styrene_14;
-        L.usage_reset_font = &font_styrene_14;
+        L.usage_reset_font = &font_styrene_16;
         L.usage_anim_font  = &font_styrene_14;
-        L.show_logo    = false;
-        L.show_anim    = false;
-        L.show_battery = false;
+        L.show_logo    = true;
+        L.show_anim    = true;
+        L.show_battery = true;
         L.bt_info_panel_h = 100;
         L.bt_reset_zone_h = 60;
         L.bt_title_font    = &font_styrene_20;
@@ -244,6 +245,14 @@ static const char* const anim_messages[] = {
 #define ANIM_MSG_COUNT (sizeof(anim_messages) / sizeof(anim_messages[0]))
 
 static lv_color_t pct_color(float pct) {
+    // On the tiny e-paper tier the display HAL inverts pixel luminance,
+    // and only COL_AMBER lands cleanly on the panel-black side of the
+    // threshold (COL_RED inverts to invisible-white; COL_GREEN is on
+    // the edge). Forcing the indicator to a high-luminance text colour
+    // makes the filled portion render as a solid panel-black bar
+    // regardless of rate-group, paired with the bar's high-luminance
+    // border for a clean black-outline + black-fill paper-style bar.
+    if (L.scr_h < 250) return COL_TEXT;
     if (pct >= 80.0f) return COL_RED;
     if (pct >= 50.0f) return COL_AMBER;
     return COL_GREEN;
@@ -273,10 +282,14 @@ static lv_obj_t* make_panel(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(panel, 8, 0);
     lv_obj_set_style_border_width(panel, 0, 0);
-    lv_obj_set_style_pad_left(panel, 16, 0);
-    lv_obj_set_style_pad_right(panel, 16, 0);
-    lv_obj_set_style_pad_top(panel, 12, 0);
-    lv_obj_set_style_pad_bottom(panel, 12, 0);
+    // Tighter padding on the tiny tier so the pct + bar + reset all fit
+    // inside a ~70 px panel.
+    const int hpad = (L.scr_h < 250) ? 6 : 16;
+    const int vpad = (L.scr_h < 250) ? 4 : 12;
+    lv_obj_set_style_pad_left(panel, hpad, 0);
+    lv_obj_set_style_pad_right(panel, hpad, 0);
+    lv_obj_set_style_pad_top(panel, vpad, 0);
+    lv_obj_set_style_pad_bottom(panel, vpad, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(panel, LV_OBJ_FLAG_EVENT_BUBBLE);
     return panel;
@@ -294,6 +307,17 @@ static lv_obj_t* make_bar(lv_obj_t* parent, int x, int y, int w, int h) {
     lv_obj_set_style_bg_color(bar, COL_GREEN, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_radius(bar, 6, LV_PART_INDICATOR);
+    // Tiny tier (e-paper): give the bar a high-luminance border so the
+    // display-HAL inversion renders a clean BLACK outline of the full
+    // bar extent on the white panel. Without this the unfilled portion
+    // of the bar (COL_BAR_BG, very dark, inverts to panel-white) is
+    // invisible and a low-percentage filled bar looks like a tiny smear
+    // at the left edge.
+    if (L.scr_h < 250) {
+        lv_obj_set_style_border_color(bar, COL_TEXT, LV_PART_MAIN);
+        lv_obj_set_style_border_width(bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_border_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    }
     return bar;
 }
 
@@ -506,14 +530,37 @@ void ui_init(void) {
         lv_obj_add_event_cb(splash_get_root(), global_click_cb, LV_EVENT_CLICKED, NULL);
     }
 
+    // Logo + battery icons. On the tiny tier the source images (80x80
+    // logo, 48x48 battery) overwhelm a 200 px panel, so apply LVGL's
+    // built-in scaling (256 = 1.0x) to shrink them to ~30 / ~24 px and
+    // tuck the logo and battery into the top corners flanking the
+    // "Usage" title. Native size on AMOLED tiers.
+    //
+    // lv_image's scale operates around the image pivot (default
+    // center); without overriding the pivot, a scaled 80x80 image
+    // renders centered inside its 80x80 bbox with empty padding, so
+    // positioning by top-left coordinates doesn't match what's drawn.
+    // Pinning pivot to (0,0) anchors the scaled image at the widget's
+    // top-left so set_pos coordinates match the visible top-left
+    // corner. (At 1.0x scale this is identity; safe to apply on AMOLED.)
+    const bool tiny = (L.scr_h < 250);
+    const uint32_t logo_scale    = tiny ? 96  : 256;   // 80 -> 30
+    const uint32_t battery_scale = tiny ? 128 : 256;   // 48 -> 24
+    const int battery_w = (ICON_BATTERY_W * (int)battery_scale) / 256;
+
     logo_img = lv_image_create(scr);
     lv_image_set_src(logo_img, &logo_dsc);
-    lv_obj_set_pos(logo_img, L.margin, L.title_y - 10);
+    lv_image_set_pivot(logo_img, 0, 0);
+    lv_image_set_scale(logo_img, logo_scale);
+    lv_obj_set_pos(logo_img, L.margin, tiny ? 0 : (L.title_y - 10));
     if (!L.show_logo) lv_obj_add_flag(logo_img, LV_OBJ_FLAG_HIDDEN);
 
     battery_img = lv_image_create(scr);
     lv_image_set_src(battery_img, &battery_dscs[0]);
-    lv_obj_set_pos(battery_img, L.scr_w - 48 - L.margin, L.title_y);
+    lv_image_set_pivot(battery_img, 0, 0);
+    lv_image_set_scale(battery_img, battery_scale);
+    lv_obj_set_pos(battery_img, L.scr_w - battery_w - L.margin,
+                   tiny ? 4 : L.title_y);
     if (!L.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
