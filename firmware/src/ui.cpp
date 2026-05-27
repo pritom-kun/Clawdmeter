@@ -169,7 +169,11 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_reset_zone_h = 60;
         L.bt_title_font    = &font_styrene_20;
         L.bt_status_font   = &font_styrene_14;
-        L.bt_device_font   = &font_styrene_14;
+        // styrene_12 (not 14) so "Address: 70:04:1D:DB:CC:89" — 25 chars
+        // averaging ~8 px each at styrene_14 — fits on a single line in
+        // the 188 px content area. Also used for the "Device:" line and
+        // the "Reset Bluetooth" label so they share visual weight.
+        L.bt_device_font   = &font_styrene_12;
         L.bt_credit_1_font = &font_styrene_12;
         L.bt_credit_2_font = &font_styrene_12;
     }
@@ -569,28 +573,40 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
                        L.margin + bt_icon_size + 6,
                        bt_icon_y + (bt_icon_size - 14) / 2);
 
+        // LVGL's LV_LABEL_LONG_MODE_DOTS only adds "..." when the text
+        // exceeds the label's *bounding box* (both width AND height); if
+        // height is auto, the label grows vertically and the text wraps
+        // instead. Lock height to one line height so any future-long
+        // device/MAC/credit text truncates cleanly rather than wrapping
+        // off-screen.
+        const int device_line_h = 14;  // styrene_12 line height + 2 px
+        const int credit_line_h = 14;  // styrene_12 line height + 2 px
+
         const int device_y = bt_icon_y + bt_icon_size + 8;
         lbl_ble_device = lv_label_create(ble_container);
         lv_label_set_text(lbl_ble_device, "Device: ---");
         lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
         lv_obj_set_style_text_color(lbl_ble_device, dim_text, 0);
-        lv_obj_set_width(lbl_ble_device, L.content_w);
+        lv_obj_set_size(lbl_ble_device, L.content_w, device_line_h);
         lv_label_set_long_mode(lbl_ble_device, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_ble_device, L.margin, device_y);
 
-        const int mac_y = device_y + 18;
+        const int mac_y = device_y + device_line_h + 2;
         lbl_ble_mac = lv_label_create(ble_container);
         lv_label_set_text(lbl_ble_mac, "Address: ---");
         lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
         lv_obj_set_style_text_color(lbl_ble_mac, dim_text, 0);
-        lv_obj_set_width(lbl_ble_mac, L.content_w);
+        lv_obj_set_size(lbl_ble_mac, L.content_w, device_line_h);
         lv_label_set_long_mode(lbl_ble_mac, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_ble_mac, L.margin, mac_y);
 
-        // Reset row — trash icon scaled to 22, "Reset Bluetooth" label,
-        // both inside a transparent flex row that's the click target.
-        const int reset_y = mac_y + 22;
-        const int trash_size = 22;
+        // Reset row — trash icon at 30 px (scale 160 from 48 px source,
+        // less aggressive downscale than 22 px so the icon edges
+        // survive 1bpp thresholding). "Reset Bluetooth" label next to
+        // it, both inside a transparent flex row that's the click
+        // target for ble_reset_click_cb.
+        const int reset_y    = mac_y + device_line_h + 8;
+        const int trash_size = 30;
         const int trash_scale = (trash_size * 256) / ICON_TRASH2_W;
         lv_obj_t* reset_zone = lv_obj_create(ble_container);
         lv_obj_set_pos(reset_zone, L.margin, reset_y);
@@ -610,10 +626,6 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_image_set_src(trash_img, &icon_trash_dsc);
         lv_image_set_pivot(trash_img, 0, 0);
         lv_image_set_scale(trash_img, trash_scale);
-        // The scaled image's widget bbox still reports 48×48 to the
-        // flex layout — force the explicit size so flex centres it
-        // tightly next to the label instead of leaving 13 px of empty
-        // bbox on each side.
         lv_obj_set_size(trash_img, trash_size, trash_size);
 
         lv_obj_t* reset_lbl = lv_label_create(reset_zone);
@@ -621,24 +633,30 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
         lv_obj_set_style_text_color(reset_lbl, dim_text, 0);
 
-        // Credits at the bottom in styrene_12, both centred and
-        // truncated with "..." if they exceed the panel width.
-        const int credit2_y = L.scr_h - 14;
-        const int credit1_y = credit2_y - 14;
+        // Credits at the bottom in styrene_12, both centred. Use
+        // a fixed (width, height) bbox + LV_LABEL_LONG_MODE_DOTS so
+        // long lines truncate to "..." instead of wrapping to a
+        // second line that falls off the panel (which is what was
+        // happening to the full "Clawd animation by @amaanbuilds"
+        // string at 31 chars). Credit-2 also gets a shorter text on
+        // this tier for the same reason — even at styrene_12 the long
+        // form sits right at the panel boundary.
+        const int credit2_y = L.scr_h - credit_line_h;
+        const int credit1_y = credit2_y - credit_line_h;
         lv_obj_t* lbl_credit = lv_label_create(ble_container);
         lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
         lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
         lv_obj_set_style_text_color(lbl_credit, dim_text, 0);
-        lv_obj_set_width(lbl_credit, L.content_w);
+        lv_obj_set_size(lbl_credit, L.content_w, credit_line_h);
         lv_obj_set_style_text_align(lbl_credit, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lbl_credit, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_credit, L.margin, credit1_y);
 
         lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
-        lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
+        lv_label_set_text(lbl_credit2, "Anim by @amaanbuilds");
         lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
         lv_obj_set_style_text_color(lbl_credit2, dim_text, 0);
-        lv_obj_set_width(lbl_credit2, L.content_w);
+        lv_obj_set_size(lbl_credit2, L.content_w, credit_line_h);
         lv_obj_set_style_text_align(lbl_credit2, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lbl_credit2, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_credit2, L.margin, credit2_y);
