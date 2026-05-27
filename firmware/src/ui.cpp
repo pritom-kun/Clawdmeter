@@ -480,12 +480,27 @@ static void init_usage_screen(lv_obj_t* scr) {
         // "Flibbertigibbeting" — overflow the panel width at that
         // size, so give the label a fixed width and let LVGL truncate
         // gracefully with its own "..." marker instead of running off
-        // the right edge. Centered within the bottom row.
+        // the right edge. Width = L.content_w with LV_ALIGN_BOTTOM_MID
+        // puts the widget at x=L.margin..(scr_w-L.margin), text
+        // centered inside — visually flanked by equal margins on each
+        // side.
         lv_obj_set_width(lbl_anim, L.content_w);
         lv_obj_set_style_text_align(lbl_anim, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lbl_anim, LV_LABEL_LONG_MODE_DOTS);
+
+        // Vertically centre the label in the free space between the
+        // bottom of the second usage panel and the bottom of the
+        // screen. font_mono_18 reports a line height of ~18 px, so
+        // half-height ≈ 9.
+        const int weekly_bottom = L.content_y + 2 * L.usage_panel_h
+                                + L.usage_panel_gap;
+        const int free_center   = (weekly_bottom + L.scr_h) / 2;
+        const int anim_half_h   = 9;
+        const int from_bottom   = L.scr_h - free_center - anim_half_h;
+        lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -from_bottom);
+    } else {
+        lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
     }
-    lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
     if (!L.show_anim) lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
 }
 
