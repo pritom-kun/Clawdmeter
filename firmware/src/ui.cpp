@@ -387,8 +387,17 @@ static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
     lv_obj_t* lbl = lv_label_create(parent);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, L.usage_pill_font, 0);
-    lv_obj_set_style_text_color(lbl, COL_TEXT, 0);
-    lv_obj_set_style_bg_color(lbl, COL_BAR_BG, 0);
+    // On AMOLED the pill is a dark COL_BAR_BG background (lum ~42) with
+    // light COL_TEXT (lum ~248) on top — a dim chip framing the label.
+    // On slow_refresh (e-paper) the display HAL inverts pixel luminance
+    // so COL_BAR_BG would render as invisible-white against the white
+    // panel. Swap to a high-luminance background + low-luminance text
+    // on those boards so the pill renders as a solid black chip with
+    // white text — the same visual prominence as the AMOLED pill, just
+    // inverted.
+    const bool slow = board_caps().slow_refresh;
+    lv_obj_set_style_bg_color(lbl, slow ? COL_TEXT  : COL_BAR_BG, 0);
+    lv_obj_set_style_text_color(lbl, slow ? COL_BG   : COL_TEXT,   0);
     lv_obj_set_style_bg_opa(lbl, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(lbl, LV_RADIUS_CIRCLE, 0);
     // Pill padding scales with the font: keep tight on the tiny tier so
