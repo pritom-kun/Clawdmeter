@@ -208,9 +208,17 @@ static uint8_t anim_msg_idx = 0;
 static uint32_t anim_msg_start = 0;
 #define ANIM_MSG_MS     4000
 
+// Two spinner sets — Unicode decorative stars/dots for AMOLED tiers (the
+// large font_mono_32 has the U+27xx glyphs covered), and ASCII fallbacks
+// for the tiny e-paper tier (font_styrene_14 doesn't include those
+// codepoints and would render them as missing-glyph boxes). Selected at
+// runtime in ui_tick_anim based on slow_refresh / tiny layout.
 static const char* const spinner_frames[] = {
     "\xC2\xB7", "\xE2\x9C\xBB", "\xE2\x9C\xBD",
     "\xE2\x9C\xB6", "\xE2\x9C\xB3", "\xE2\x9C\xA2",
+};
+static const char* const spinner_frames_ascii[] = {
+    ".", "o", "O", "*", "O", "o",
 };
 #define SPINNER_COUNT 6
 #define SPINNER_PHASES (2 * (SPINNER_COUNT - 1))  // 10: ping-pong 0..5..0
@@ -610,12 +618,20 @@ void ui_tick_anim(void) {
     uint32_t now = lv_tick_get();
 
     const bool slow = board_caps().slow_refresh;
-    // On slow_refresh (e-paper) boards every animation tick triggers a
-    // full-refresh — ~1.5 s panel flicker and one refresh against the
-    // panel's ~1 M-refresh budget. 4 s/8 s wore out a continuously-active
-    // panel in ~45 days. 60 s keeps the device inside spec for ~5 years.
-    const uint32_t msg_interval     = slow ? 60000 : ANIM_MSG_MS;
-    const uint32_t spinner_interval = slow ? 60000 : spinner_ms[anim_spinner_idx];
+    // The 60 s slow_refresh cadence was set when every UI update meant a
+    // full-refresh flicker. The SSD1681 driver now does proper partial
+    // refresh for animation updates (epd_partial_refresh, no inversion
+    // flash, ~300 ms), so animation can run at near-AMOLED speed —
+    // capped at 1 s minimum so partial refreshes don't queue up.
+    const uint32_t msg_interval     = slow ? 5000 : ANIM_MSG_MS;
+    const uint32_t spinner_interval = slow ? 1000 : spinner_ms[anim_spinner_idx];
+
+    // On the tiny e-paper tier swap to ASCII spinner glyphs +
+    // three-dot ellipsis. font_styrene_14 doesn't include the
+    // decorative U+27xx star characters or U+2026 ellipsis, so the
+    // Unicode set renders as missing-glyph boxes.
+    const char* const* spinners = slow ? spinner_frames_ascii : spinner_frames;
+    const char* tail            = slow ? "..."                : "\xE2\x80\xA6";
 
     if (now - anim_msg_start >= msg_interval) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
@@ -629,9 +645,10 @@ void ui_tick_anim(void) {
                                                         : (SPINNER_PHASES - anim_phase);
 
         static char buf[80];
-        snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
-                 spinner_frames[anim_spinner_idx],
-                 anim_messages[anim_msg_idx]);
+        snprintf(buf, sizeof(buf), "%s %s%s",
+                 spinners[anim_spinner_idx],
+                 anim_messages[anim_msg_idx],
+                 tail);
         lv_label_set_text(lbl_anim, buf);
     }
 }

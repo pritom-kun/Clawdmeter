@@ -13,9 +13,13 @@
 // so settle reliably fires between ticks.
 #define SETTLE_MS  100
 
-// Full refresh trigger: fire whichever fires first.
-#define FULL_REFRESH_INTERVAL_MS  60000  // time-based ghost clearance
-#define MAX_PARTIALS_BEFORE_FULL  30     // safety override on activity bursts
+// Full refresh trigger: fire whichever fires first. With partial refresh
+// driving the per-second spinner + 5-second message rotation in ui.cpp,
+// the panel hits ~75 partial refreshes per minute under normal activity;
+// keep these thresholds generous so the user only sees the inversion-
+// flicker full-refresh every few minutes for ghost clearance.
+#define FULL_REFRESH_INTERVAL_MS  300000  // 5 min — time-based ghost clearance
+#define MAX_PARTIALS_BEFORE_FULL  250     // ~3.5 min at 75 partials/min
 
 static uint8_t* framebuf = nullptr;
 static bool     dirty = false;
