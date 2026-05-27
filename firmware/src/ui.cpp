@@ -150,7 +150,9 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_bar_h = 10;
         L.panel_hpad = 6;
         L.panel_vpad = 1;
-        L.usage_title_font = &font_styrene_16;
+        // Match the Bluetooth screen's title size (L.bt_title_font =
+        // styrene_20) so the two screens read at the same visual weight.
+        L.usage_title_font = &font_styrene_20;
         L.usage_pct_font   = &font_styrene_28;
         L.usage_pill_font  = &font_styrene_14;
         L.usage_reset_font = &font_styrene_16;
@@ -588,6 +590,9 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
         lv_obj_set_style_text_color(lbl_ble_device, dim_text, 0);
         lv_obj_set_size(lbl_ble_device, L.content_w, device_line_h);
+        // Centre the device + MAC text so they line up under the
+        // centred "Bluetooth" title instead of jutting out left.
+        lv_obj_set_style_text_align(lbl_ble_device, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lbl_ble_device, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_ble_device, L.margin, device_y);
 
@@ -597,16 +602,20 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
         lv_obj_set_style_text_color(lbl_ble_mac, dim_text, 0);
         lv_obj_set_size(lbl_ble_mac, L.content_w, device_line_h);
+        lv_obj_set_style_text_align(lbl_ble_mac, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(lbl_ble_mac, LV_LABEL_LONG_MODE_DOTS);
         lv_obj_set_pos(lbl_ble_mac, L.margin, mac_y);
 
-        // Reset row — trash icon at 30 px (scale 160 from 48 px source,
-        // less aggressive downscale than 22 px so the icon edges
-        // survive 1bpp thresholding). "Reset Bluetooth" label next to
-        // it, both inside a transparent flex row that's the click
-        // target for ble_reset_click_cb.
+        // Reset row — trash icon at the same 28×28 size as the BT icon
+        // up top so the two icons feel like a matched pair, instead of
+        // the trash looking lonely or oversized. "Reset Bluetooth"
+        // label next to it, both inside a transparent flex row that's
+        // the click target for ble_reset_click_cb. (The trash icon's
+        // fine interior detail still suffers at 28×28 vs the BT
+        // icon's chunkier shape — that's an icon-design limitation,
+        // not something we can fix from here without a new asset.)
         const int reset_y    = mac_y + device_line_h + 8;
-        const int trash_size = 30;
+        const int trash_size = bt_icon_size;   // match the BT icon size
         const int trash_scale = (trash_size * 256) / ICON_TRASH2_W;
         lv_obj_t* reset_zone = lv_obj_create(ble_container);
         lv_obj_set_pos(reset_zone, L.margin, reset_y);
@@ -633,16 +642,17 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
         lv_obj_set_style_text_color(reset_lbl, dim_text, 0);
 
-        // Credits at the bottom in styrene_12, both centred. Use
-        // a fixed (width, height) bbox + LV_LABEL_LONG_MODE_DOTS so
-        // long lines truncate to "..." instead of wrapping to a
-        // second line that falls off the panel (which is what was
-        // happening to the full "Clawd animation by @amaanbuilds"
-        // string at 31 chars). Credit-2 also gets a shorter text on
-        // this tier for the same reason — even at styrene_12 the long
-        // form sits right at the panel boundary.
-        const int credit2_y = L.scr_h - credit_line_h;
+        // Credits at the bottom in styrene_12, both centred. Credit-1
+        // ("Built by @hermannbjorgvin") fits on one line; credit-2
+        // ("Clawd animation by @amaanbuilds") wraps to two lines —
+        // height is set to two line heights and LV_LABEL_LONG_MODE_WRAP
+        // (LVGL default) is used so the "@amaanbuilds" continuation
+        // lands on its own line inside the bbox instead of being
+        // truncated.
+        const int credit2_h = 2 * credit_line_h;
+        const int credit2_y = L.scr_h - credit2_h;
         const int credit1_y = credit2_y - credit_line_h;
+
         lv_obj_t* lbl_credit = lv_label_create(ble_container);
         lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
         lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
@@ -653,12 +663,13 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_pos(lbl_credit, L.margin, credit1_y);
 
         lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
-        lv_label_set_text(lbl_credit2, "Anim by @amaanbuilds");
+        lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
         lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
         lv_obj_set_style_text_color(lbl_credit2, dim_text, 0);
-        lv_obj_set_size(lbl_credit2, L.content_w, credit_line_h);
+        lv_obj_set_size(lbl_credit2, L.content_w, credit2_h);
         lv_obj_set_style_text_align(lbl_credit2, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_long_mode(lbl_credit2, LV_LABEL_LONG_MODE_DOTS);
+        // Default long mode (WRAP) so "@amaanbuilds" flows to line two
+        // when "Clawd animation by " fills line one.
         lv_obj_set_pos(lbl_credit2, L.margin, credit2_y);
     } else {
         // -------- AMOLED BT layout (unchanged) --------
