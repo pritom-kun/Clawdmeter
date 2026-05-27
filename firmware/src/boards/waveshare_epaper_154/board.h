@@ -7,17 +7,25 @@
 #define LCD_HEIGHT           200
 
 // ---- SSD1681 e-paper pins (SPI) ----
-// TODO: verify against V2 schematic at docs.waveshare.com/ESP32-S3-ePaper-1.54
-#define EPD_CS               7
+// Verified against the official Waveshare example at
+// https://github.com/waveshareteam/ESP32-S3-ePaper-1.54
+// (02_Example/Arduino/07_BATT_PWR_Test/user_config.h).
+#define EPD_CS               11
 #define EPD_SCLK             12
-#define EPD_MOSI             11
-#define EPD_DC               6
-#define EPD_RST              5
-#define EPD_BUSY             4
+#define EPD_MOSI             13
+#define EPD_DC               10
+#define EPD_RST              9
+#define EPD_BUSY             8
+// EPD_PWR is active-LOW — drive LOW to enable the panel's onboard
+// regulator, HIGH to power it off. Without this the SSD1681 has no Vcc
+// and silently swallows every SPI transaction while the panel keeps
+// showing whatever image it had at power-on (the factory clock demo,
+// in our case).
+#define EPD_PWR              6
 
 // ---- Buttons ----
 #define BTN_BACK_GPIO        0     // BOOT — primary, Space (PTT)
-#define BTN_PWR_GPIO         21    // TODO: verify against V2 schematic
+#define BTN_PWR_GPIO         18    // PWR side-button (verified V2)
 
 // ---- Capability flags ----
 #define BOARD_HAS_SECONDARY_BUTTON 0

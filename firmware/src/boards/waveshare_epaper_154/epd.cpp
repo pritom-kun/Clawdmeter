@@ -89,6 +89,16 @@ static void set_cursor(int bx, int y) {
 // ---------------------------------------------------------------------------
 
 void epd_init(void) {
+    // Enable the panel's onboard regulator FIRST (active-LOW). Without
+    // this the SSD1681 has no Vcc; SPI transactions are silently lost
+    // and the panel keeps showing whatever it had at power-on. The
+    // reference driver in waveshareteam/ESP32-S3-ePaper-1.54's
+    // 07_BATT_PWR_Test/src/power/board_power_bsp.cpp confirms the
+    // active-low convention: `gpio_set_level(epd_power_pin, 0)` = ON.
+    pinMode(EPD_PWR, OUTPUT);
+    digitalWrite(EPD_PWR, LOW);
+    delay(10);   // let Vcc settle before clocking SCLK/CS
+
     // Bring up SPI bus (MISO unused — SSD1681 is write-only).
     spi_bus.begin(EPD_SCLK, /*MISO=*/-1, EPD_MOSI, /*SS=*/-1);
 
