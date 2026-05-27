@@ -15,6 +15,7 @@ LV_FONT_DECLARE(font_styrene_20);
 LV_FONT_DECLARE(font_styrene_16);
 LV_FONT_DECLARE(font_styrene_14);
 LV_FONT_DECLARE(font_mono_32);
+LV_FONT_DECLARE(font_mono_18);
 
 // Layout values computed from the active board's geometry. Populated once
 // in ui_init() and treated as const for the rest of the program. Adding a
@@ -152,7 +153,14 @@ static void compute_layout(const BoardCaps& c) {
         L.usage_pct_font   = &font_styrene_28;
         L.usage_pill_font  = &font_styrene_14;
         L.usage_reset_font = &font_styrene_16;
-        L.usage_anim_font  = &font_styrene_14;
+        // font_mono_18 (DejaVuSansMono) was generated with the U+27xx
+        // spinner glyphs and U+2026 ellipsis included; the proportional
+        // Styrene fonts are ASCII-only. Using mono here on the tiny
+        // tier brings back the original Unicode spinner aesthetic at
+        // the cost of a slightly different (monospaced) typeface for
+        // the footer line — accepted trade-off documented in the
+        // commit message.
+        L.usage_anim_font  = &font_mono_18;
         L.show_logo    = true;
         L.show_anim    = true;
         L.show_battery = true;
@@ -216,17 +224,14 @@ static uint8_t anim_msg_idx = 0;
 static uint32_t anim_msg_start = 0;
 #define ANIM_MSG_MS     4000
 
-// Two spinner sets — Unicode decorative stars/dots for AMOLED tiers (the
-// large font_mono_32 has the U+27xx glyphs covered), and ASCII fallbacks
-// for the tiny e-paper tier (font_styrene_14 doesn't include those
-// codepoints and would render them as missing-glyph boxes). Selected at
-// runtime in ui_tick_anim based on slow_refresh / tiny layout.
+// Decorative spinner glyphs: U+00B7 middle dot + U+2722/2733/2736/273B/
+// 273D Dingbats stars. Both anim fonts (font_mono_32 on AMOLED,
+// font_mono_18 on the tiny tier — DejaVuSansMono in both cases) were
+// generated with these codepoints in their glyph range, so the spinner
+// renders properly on every board.
 static const char* const spinner_frames[] = {
     "\xC2\xB7", "\xE2\x9C\xBB", "\xE2\x9C\xBD",
     "\xE2\x9C\xB6", "\xE2\x9C\xB3", "\xE2\x9C\xA2",
-};
-static const char* const spinner_frames_ascii[] = {
-    ".", "o", "O", "*", "O", "o",
 };
 #define SPINNER_COUNT 6
 #define SPINNER_PHASES (2 * (SPINNER_COUNT - 1))  // 10: ping-pong 0..5..0
@@ -468,6 +473,18 @@ static void init_usage_screen(lv_obj_t* scr) {
     // slow_refresh boards; AMOLEDs keep the accent colour.
     lv_obj_set_style_text_color(lbl_anim,
         board_caps().slow_refresh ? COL_TEXT : COL_ACCENT, 0);
+    if (L.scr_h < 250) {
+        // Tiny tier uses the proportional 18-px DejaVuSansMono for the
+        // anim label (it's the only available font that carries the
+        // U+27xx spinner glyphs). The longest messages — e.g.
+        // "Flibbertigibbeting" — overflow the panel width at that
+        // size, so give the label a fixed width and let LVGL truncate
+        // gracefully with its own "..." marker instead of running off
+        // the right edge. Centered within the bottom row.
+        lv_obj_set_width(lbl_anim, L.content_w);
+        lv_obj_set_style_text_align(lbl_anim, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(lbl_anim, LV_LABEL_LONG_MODE_DOTS);
+    }
     lv_obj_align(lbl_anim, LV_ALIGN_BOTTOM_MID, 0, -15);
     if (!L.show_anim) lv_obj_add_flag(lbl_anim, LV_OBJ_FLAG_HIDDEN);
 }
@@ -651,13 +668,6 @@ void ui_tick_anim(void) {
     const uint32_t msg_interval     = slow ? 5000 : ANIM_MSG_MS;
     const uint32_t spinner_interval = slow ? 1000 : spinner_ms[anim_spinner_idx];
 
-    // On the tiny e-paper tier swap to ASCII spinner glyphs +
-    // three-dot ellipsis. font_styrene_14 doesn't include the
-    // decorative U+27xx star characters or U+2026 ellipsis, so the
-    // Unicode set renders as missing-glyph boxes.
-    const char* const* spinners = slow ? spinner_frames_ascii : spinner_frames;
-    const char* tail            = slow ? "..."                : "\xE2\x80\xA6";
-
     if (now - anim_msg_start >= msg_interval) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;
         anim_msg_start = now;
@@ -670,10 +680,11 @@ void ui_tick_anim(void) {
                                                         : (SPINNER_PHASES - anim_phase);
 
         static char buf[80];
-        snprintf(buf, sizeof(buf), "%s %s%s",
-                 spinners[anim_spinner_idx],
-                 anim_messages[anim_msg_idx],
-                 tail);
+        // The U+2026 ellipsis (\xE2\x80\xA6) lives in both anim fonts'
+        // glyph range — see the spinner_frames comment above.
+        snprintf(buf, sizeof(buf), "%s %s\xE2\x80\xA6",
+                 spinner_frames[anim_spinner_idx],
+                 anim_messages[anim_msg_idx]);
         lv_label_set_text(lbl_anim, buf);
     }
 }
