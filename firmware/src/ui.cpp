@@ -560,20 +560,35 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         const int bt_icon_scale = (bt_icon_size * 256) / ICON_BLUETOOTH_W;
         const int bt_icon_y     = L.content_y;
 
-        lv_obj_t* bt_img = lv_image_create(ble_container);
+        // BT icon + status share a centred flex row instead of being
+        // positioned by hand, so the pair sits visually under the
+        // centred "Bluetooth" title rather than left-jutting from the
+        // margin.
+        lv_obj_t* bt_row = lv_obj_create(ble_container);
+        lv_obj_set_pos(bt_row, 0, bt_icon_y);
+        lv_obj_set_size(bt_row, L.scr_w, bt_icon_size);
+        lv_obj_set_style_bg_opa(bt_row, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(bt_row, 0, 0);
+        lv_obj_set_style_pad_all(bt_row, 0, 0);
+        lv_obj_set_style_pad_column(bt_row, 6, 0);
+        lv_obj_set_flex_flow(bt_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(bt_row, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(bt_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(bt_row, LV_OBJ_FLAG_EVENT_BUBBLE);
+
+        lv_obj_t* bt_img = lv_image_create(bt_row);
         lv_image_set_src(bt_img, &icon_bt_dsc);
         lv_image_set_pivot(bt_img, 0, 0);
         lv_image_set_scale(bt_img, bt_icon_scale);
-        lv_obj_set_pos(bt_img, L.margin, bt_icon_y);
+        // Force the bbox to match the scaled output so the flex row
+        // doesn't reserve 48 × 48 (source size) for the icon.
+        lv_obj_set_size(bt_img, bt_icon_size, bt_icon_size);
 
-        lbl_ble_status = lv_label_create(ble_container);
+        lbl_ble_status = lv_label_create(bt_row);
         lv_label_set_text(lbl_ble_status, "Initializing...");
         lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
         lv_obj_set_style_text_color(lbl_ble_status, dim_text, 0);
-        // Vertically centre against the BT icon row.
-        lv_obj_set_pos(lbl_ble_status,
-                       L.margin + bt_icon_size + 6,
-                       bt_icon_y + (bt_icon_size - 14) / 2);
 
         // LVGL's LV_LABEL_LONG_MODE_DOTS only adds "..." when the text
         // exceeds the label's *bounding box* (both width AND height); if
@@ -607,19 +622,21 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         lv_obj_set_pos(lbl_ble_mac, L.margin, mac_y);
 
         // Reset row — trash icon at the same 28×28 size as the BT icon
-        // up top so the two icons feel like a matched pair, instead of
-        // the trash looking lonely or oversized. "Reset Bluetooth"
-        // label next to it, both inside a transparent flex row that's
-        // the click target for ble_reset_click_cb. (The trash icon's
-        // fine interior detail still suffers at 28×28 vs the BT
-        // icon's chunkier shape — that's an icon-design limitation,
-        // not something we can fix from here without a new asset.)
-        const int reset_y    = mac_y + device_line_h + 8;
+        // up top so the two icons feel like a matched pair. "Reset
+        // Bluetooth" label next to it, both inside a transparent flex
+        // row that's the click target for ble_reset_click_cb.
+        //
+        // Extra vertical padding on the row (+8 instead of +4) and a
+        // larger gap above it (+18 instead of +8) so the trash icon's
+        // top strokes aren't clipped by the row's edges. Row height
+        // works out to 36 px, leaving 4 px of clearance above the
+        // first credit line at y=158.
+        const int reset_y    = mac_y + device_line_h + 18;
         const int trash_size = bt_icon_size;   // match the BT icon size
         const int trash_scale = (trash_size * 256) / ICON_TRASH2_W;
         lv_obj_t* reset_zone = lv_obj_create(ble_container);
         lv_obj_set_pos(reset_zone, L.margin, reset_y);
-        lv_obj_set_size(reset_zone, L.content_w, trash_size + 4);
+        lv_obj_set_size(reset_zone, L.content_w, trash_size + 8);
         lv_obj_set_style_bg_opa(reset_zone, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(reset_zone, 0, 0);
         lv_obj_set_style_pad_all(reset_zone, 0, 0);
