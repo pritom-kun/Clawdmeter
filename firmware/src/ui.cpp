@@ -162,7 +162,11 @@ static void compute_layout(const BoardCaps& c) {
         // styrene_20) so the two screens read at the same visual weight.
         L.usage_title_font = &font_styrene_20;
         L.usage_pct_font   = &font_styrene_28;
-        L.usage_pill_font  = &font_styrene_14;
+        // styrene_16 (was 14) so the "Current"/"Weekly" pill reads
+        // slightly bigger and balances better against the styrene_28
+        // percentage next to it. styrene_16 is the next available
+        // size between 14 and 20.
+        L.usage_pill_font  = &font_styrene_16;
         L.usage_reset_font = &font_styrene_16;
         // font_mono_18 (DejaVuSansMono) was generated with the U+27xx
         // spinner glyphs and U+2026 ellipsis included; the proportional
@@ -433,7 +437,19 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
     lv_obj_set_pos(*out_pct, 0, 0);
 
     *out_pill = make_pill(panel, pill_text);
-    lv_obj_align(*out_pill, LV_ALIGN_TOP_RIGHT, 0, 1);
+    // Vertically centre the pill's line-box against the percentage
+    // label's line-box so the two read on the same baseline instead
+    // of the pill clinging to the panel top while the bigger pct
+    // glyph extends well below it. Derived from font line-heights so
+    // it stays correct on every tier:
+    //   tiny    : pct=28, pill=16+4 pad → offset (28-20)/2 = 4
+    //   compact : pct=48, pill=28+12 pad → offset (48-40)/2 = 4
+    //   large   : same as compact
+    const int pill_vpad = (L.scr_h < 250) ? 2 : 6;
+    const int pct_h     = lv_font_get_line_height(L.usage_pct_font);
+    const int pill_h    = lv_font_get_line_height(L.usage_pill_font)
+                        + 2 * pill_vpad;
+    lv_obj_align(*out_pill, LV_ALIGN_TOP_RIGHT, 0, (pct_h - pill_h) / 2);
 
     // Bar fills the panel's full content width (panel total minus both
     // sides' padding). The previous "- 32" was hardcoded for AMOLED
