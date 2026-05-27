@@ -84,8 +84,14 @@ void display_hal_draw_bitmap(int32_t x, int32_t y, int32_t w, int32_t h,
             if (px < 0 || px >= LCD_WIDTH) continue;
             uint8_t bit  = 1 << (7 - (px & 7));
             uint8_t* byte = &framebuf[py * (LCD_WIDTH / 8) + (px >> 3)];
-            if (rgb565_is_white(pixels[row * w + col])) *byte |=  bit;
-            else                                         *byte &= ~bit;
+            // INVERTED for e-paper: the shared UI uses a dark theme
+            // (THEME_BG=0x000000, THEME_TEXT=0xfaf9f5) which is natural
+            // on AMOLED but unnatural on e-paper. Map LVGL-light pixels
+            // (text/icons) to panel-black, and LVGL-dark pixels
+            // (background) to panel-white — gives black-on-white output
+            // on the panel without touching shared UI code.
+            if (rgb565_is_white(pixels[row * w + col])) *byte &= ~bit;
+            else                                         *byte |=  bit;
         }
     }
     expand_dirty(x, y, w, h);
