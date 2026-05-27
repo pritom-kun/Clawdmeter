@@ -137,7 +137,12 @@ static void compute_layout(const BoardCaps& c) {
         //   y=102..166 panel 2 (Weekly) - 64 px
         //   y=170..200 footer: rotating animation message
         L.margin = 6;
-        L.title_y = 8;
+        // title_y=0 so the top of the "Usage" / "Bluetooth" header
+        // aligns with the top of the Claude logo (also at y=0 on this
+        // tier) and the battery icon (also at y=0 below). Title font
+        // is styrene_20 → title spans y=0..20, comfortably inside the
+        // 30-px top row.
+        L.title_y = 0;
         L.content_y = 34;
         L.usage_panel_h = 64;
         L.usage_panel_gap = 4;
@@ -557,7 +562,6 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         //   y=156..168 Credit line 1 (styrene_12)
         //   y=170..182 Credit line 2 (styrene_12)
         const int bt_icon_size  = 28;
-        const int bt_icon_scale = (bt_icon_size * 256) / ICON_BLUETOOTH_W;
         const int bt_icon_y     = L.content_y;
 
         // BT icon + status share a centred flex row instead of being
@@ -579,11 +583,15 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
         lv_obj_t* bt_img = lv_image_create(bt_row);
         lv_image_set_src(bt_img, &icon_bt_dsc);
-        lv_image_set_pivot(bt_img, 0, 0);
-        lv_image_set_scale(bt_img, bt_icon_scale);
-        // Force the bbox to match the scaled output so the flex row
-        // doesn't reserve 48 × 48 (source size) for the icon.
+        // LV_IMAGE_ALIGN_CONTAIN + an explicit bbox size lets LVGL
+        // auto-scale the 48 × 48 source to fit the 28 × 28 widget
+        // while preserving aspect — cleaner than combining
+        // lv_image_set_scale with lv_obj_set_size (which double-scales
+        // because the size constraint AND the scale value both
+        // shrink the image, and the prior 28×28 bbox+0.58× scale
+        // collapsed the BT icon to ~16 px).
         lv_obj_set_size(bt_img, bt_icon_size, bt_icon_size);
+        lv_image_set_inner_align(bt_img, LV_IMAGE_ALIGN_CONTAIN);
 
         lbl_ble_status = lv_label_create(bt_row);
         lv_label_set_text(lbl_ble_status, "Initializing...");
@@ -633,7 +641,6 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
         // first credit line at y=158.
         const int reset_y    = mac_y + device_line_h + 18;
         const int trash_size = bt_icon_size;   // match the BT icon size
-        const int trash_scale = (trash_size * 256) / ICON_TRASH2_W;
         lv_obj_t* reset_zone = lv_obj_create(ble_container);
         lv_obj_set_pos(reset_zone, L.margin, reset_y);
         lv_obj_set_size(reset_zone, L.content_w, trash_size + 8);
@@ -650,9 +657,11 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
         lv_obj_t* trash_img = lv_image_create(reset_zone);
         lv_image_set_src(trash_img, &icon_trash_dsc);
-        lv_image_set_pivot(trash_img, 0, 0);
-        lv_image_set_scale(trash_img, trash_scale);
+        // Same CONTAIN-based scaling as the BT icon above — LVGL
+        // resizes the 48 × 48 source to fit the 28 × 28 widget while
+        // preserving aspect ratio, no manual scale math needed.
         lv_obj_set_size(trash_img, trash_size, trash_size);
+        lv_image_set_inner_align(trash_img, LV_IMAGE_ALIGN_CONTAIN);
 
         lv_obj_t* reset_lbl = lv_label_create(reset_zone);
         lv_label_set_text(reset_lbl, "Reset Bluetooth");
@@ -803,7 +812,7 @@ void ui_init(void) {
     lv_image_set_pivot(battery_img, 0, 0);
     lv_image_set_scale(battery_img, battery_scale);
     lv_obj_set_pos(battery_img, L.scr_w - battery_w - L.margin,
-                   tiny ? 4 : L.title_y);
+                   tiny ? 0 : L.title_y);
     if (!L.show_battery) lv_obj_add_flag(battery_img, LV_OBJ_FLAG_HIDDEN);
 }
 
