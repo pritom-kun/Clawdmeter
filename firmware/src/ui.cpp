@@ -14,6 +14,7 @@ LV_FONT_DECLARE(font_styrene_24);
 LV_FONT_DECLARE(font_styrene_20);
 LV_FONT_DECLARE(font_styrene_16);
 LV_FONT_DECLARE(font_styrene_14);
+LV_FONT_DECLARE(font_styrene_12);
 LV_FONT_DECLARE(font_mono_32);
 LV_FONT_DECLARE(font_mono_18);
 
@@ -167,10 +168,10 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_info_panel_h = 100;
         L.bt_reset_zone_h = 60;
         L.bt_title_font    = &font_styrene_20;
-        L.bt_status_font   = &font_styrene_16;
+        L.bt_status_font   = &font_styrene_14;
         L.bt_device_font   = &font_styrene_14;
-        L.bt_credit_1_font = &font_styrene_14;
-        L.bt_credit_2_font = &font_styrene_14;
+        L.bt_credit_1_font = &font_styrene_12;
+        L.bt_credit_2_font = &font_styrene_12;
     }
 
     L.content_w = L.scr_w - 2 * L.margin;
@@ -516,75 +517,192 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
     lv_obj_clear_flag(ble_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(ble_container, global_click_cb, LV_EVENT_CLICKED, NULL);
 
+    const bool tiny = (L.scr_h < 250);
+    const bool slow = board_caps().slow_refresh;
+    // Dim/Accent text on AMOLED becomes COL_TEXT on slow_refresh to
+    // survive the 1bpp inversion threshold (see commits 8337487/2287b4c
+    // for the rationale).
+    const lv_color_t dim_text = slow ? COL_TEXT : COL_DIM;
+
+    static lv_image_dsc_t icon_bt_dsc;
+    init_icon_dsc(&icon_bt_dsc, ICON_BLUETOOTH_W, ICON_BLUETOOTH_H, icon_bluetooth_data);
+    static lv_image_dsc_t icon_trash_dsc;
+    init_icon_dsc(&icon_trash_dsc, ICON_TRASH2_W, ICON_TRASH2_H, icon_trash2_data);
+
     lv_obj_t* lbl_ble_title = lv_label_create(ble_container);
     lv_label_set_text(lbl_ble_title, "Bluetooth");
     lv_obj_set_style_text_font(lbl_ble_title, L.bt_title_font, 0);
     lv_obj_set_style_text_color(lbl_ble_title, COL_TEXT, 0);
-    lv_obj_align(lbl_ble_title, LV_ALIGN_TOP_MID, 16, L.title_y);
+    lv_obj_align(lbl_ble_title, LV_ALIGN_TOP_MID,
+                 (L.show_logo && !tiny) ? 16 : 0, L.title_y);
 
-    lv_obj_t* p_info = make_panel(ble_container, L.margin, L.content_y,
-                                  L.content_w, L.bt_info_panel_h);
+    if (tiny) {
+        // -------- 200×200 BT layout --------
+        // The shared make_panel() background (COL_PANEL=0x1f1f1e) inverts
+        // to invisible-white on the e-paper, so the "card" framing the
+        // AMOLED layout uses adds nothing here. Place items directly on
+        // the container with explicit positions.
+        //
+        // Vertical budget (200 px total, top icon row occupies y=0..30):
+        //   y=34..66   BT icon (28×28 scaled from 48×48) + status text
+        //   y=72..86   Device: <name>
+        //   y=90..104  Address: <mac>
+        //   y=112..136 Reset row (trash 22×22 + "Reset Bluetooth")
+        //   y=156..168 Credit line 1 (styrene_12)
+        //   y=170..182 Credit line 2 (styrene_12)
+        const int bt_icon_size  = 28;
+        const int bt_icon_scale = (bt_icon_size * 256) / ICON_BLUETOOTH_W;
+        const int bt_icon_y     = L.content_y;
 
-    static lv_image_dsc_t icon_bt_dsc;
-    init_icon_dsc(&icon_bt_dsc, ICON_BLUETOOTH_W, ICON_BLUETOOTH_H, icon_bluetooth_data);
+        lv_obj_t* bt_img = lv_image_create(ble_container);
+        lv_image_set_src(bt_img, &icon_bt_dsc);
+        lv_image_set_pivot(bt_img, 0, 0);
+        lv_image_set_scale(bt_img, bt_icon_scale);
+        lv_obj_set_pos(bt_img, L.margin, bt_icon_y);
 
-    lv_obj_t* bt_img = lv_image_create(p_info);
-    lv_image_set_src(bt_img, &icon_bt_dsc);
-    lv_obj_set_pos(bt_img, 0, 0);
+        lbl_ble_status = lv_label_create(ble_container);
+        lv_label_set_text(lbl_ble_status, "Initializing...");
+        lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, dim_text, 0);
+        // Vertically centre against the BT icon row.
+        lv_obj_set_pos(lbl_ble_status,
+                       L.margin + bt_icon_size + 6,
+                       bt_icon_y + (bt_icon_size - 14) / 2);
 
-    lbl_ble_status = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_status, "Initializing...");
-    lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_status, 56, 2);
+        const int device_y = bt_icon_y + bt_icon_size + 8;
+        lbl_ble_device = lv_label_create(ble_container);
+        lv_label_set_text(lbl_ble_device, "Device: ---");
+        lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_device, dim_text, 0);
+        lv_obj_set_width(lbl_ble_device, L.content_w);
+        lv_label_set_long_mode(lbl_ble_device, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_pos(lbl_ble_device, L.margin, device_y);
 
-    lbl_ble_device = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_device, "Device: ---");
-    lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_device, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_device, 0, 64);
+        const int mac_y = device_y + 18;
+        lbl_ble_mac = lv_label_create(ble_container);
+        lv_label_set_text(lbl_ble_mac, "Address: ---");
+        lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_mac, dim_text, 0);
+        lv_obj_set_width(lbl_ble_mac, L.content_w);
+        lv_label_set_long_mode(lbl_ble_mac, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_pos(lbl_ble_mac, L.margin, mac_y);
 
-    lbl_ble_mac = lv_label_create(p_info);
-    lv_label_set_text(lbl_ble_mac, "Address: ---");
-    lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(lbl_ble_mac, COL_DIM, 0);
-    lv_obj_set_pos(lbl_ble_mac, 0, 100);
+        // Reset row — trash icon scaled to 22, "Reset Bluetooth" label,
+        // both inside a transparent flex row that's the click target.
+        const int reset_y = mac_y + 22;
+        const int trash_size = 22;
+        const int trash_scale = (trash_size * 256) / ICON_TRASH2_W;
+        lv_obj_t* reset_zone = lv_obj_create(ble_container);
+        lv_obj_set_pos(reset_zone, L.margin, reset_y);
+        lv_obj_set_size(reset_zone, L.content_w, trash_size + 4);
+        lv_obj_set_style_bg_opa(reset_zone, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(reset_zone, 0, 0);
+        lv_obj_set_style_pad_all(reset_zone, 0, 0);
+        lv_obj_set_style_pad_column(reset_zone, 6, 0);
+        lv_obj_set_flex_flow(reset_zone, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(reset_zone, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(reset_zone, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(reset_zone, ble_reset_click_cb,
+                            LV_EVENT_CLICKED, NULL);
 
-    int reset_y = L.content_y + L.bt_info_panel_h + 16;
-    lv_obj_t* reset_zone = lv_obj_create(ble_container);
-    lv_obj_set_pos(reset_zone, L.margin, reset_y);
-    lv_obj_set_size(reset_zone, L.content_w, L.bt_reset_zone_h);
-    lv_obj_set_style_bg_color(reset_zone, COL_PANEL, 0);
-    lv_obj_set_style_bg_opa(reset_zone, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(reset_zone, 8, 0);
-    lv_obj_set_style_border_width(reset_zone, 0, 0);
-    lv_obj_set_style_pad_column(reset_zone, 14, 0);
-    lv_obj_set_flex_flow(reset_zone, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(reset_zone, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(reset_zone, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(reset_zone, ble_reset_click_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t* trash_img = lv_image_create(reset_zone);
+        lv_image_set_src(trash_img, &icon_trash_dsc);
+        lv_image_set_pivot(trash_img, 0, 0);
+        lv_image_set_scale(trash_img, trash_scale);
+        // The scaled image's widget bbox still reports 48×48 to the
+        // flex layout — force the explicit size so flex centres it
+        // tightly next to the label instead of leaving 13 px of empty
+        // bbox on each side.
+        lv_obj_set_size(trash_img, trash_size, trash_size);
 
-    static lv_image_dsc_t icon_trash_dsc;
-    init_icon_dsc(&icon_trash_dsc, ICON_TRASH2_W, ICON_TRASH2_H, icon_trash2_data);
-    lv_obj_t* trash_img = lv_image_create(reset_zone);
-    lv_image_set_src(trash_img, &icon_trash_dsc);
+        lv_obj_t* reset_lbl = lv_label_create(reset_zone);
+        lv_label_set_text(reset_lbl, "Reset Bluetooth");
+        lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(reset_lbl, dim_text, 0);
 
-    lv_obj_t* reset_lbl = lv_label_create(reset_zone);
-    lv_label_set_text(reset_lbl, "Reset Bluetooth");
-    lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(reset_lbl, COL_DIM, 0);
+        // Credits at the bottom in styrene_12, both centred and
+        // truncated with "..." if they exceed the panel width.
+        const int credit2_y = L.scr_h - 14;
+        const int credit1_y = credit2_y - 14;
+        lv_obj_t* lbl_credit = lv_label_create(ble_container);
+        lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
+        lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
+        lv_obj_set_style_text_color(lbl_credit, dim_text, 0);
+        lv_obj_set_width(lbl_credit, L.content_w);
+        lv_obj_set_style_text_align(lbl_credit, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(lbl_credit, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_pos(lbl_credit, L.margin, credit1_y);
 
-    lv_obj_t* lbl_credit = lv_label_create(ble_container);
-    lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
-    lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
-    lv_obj_set_style_text_color(lbl_credit, COL_DIM, 0);
-    lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
+        lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
+        lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
+        lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
+        lv_obj_set_style_text_color(lbl_credit2, dim_text, 0);
+        lv_obj_set_width(lbl_credit2, L.content_w);
+        lv_obj_set_style_text_align(lbl_credit2, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(lbl_credit2, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_pos(lbl_credit2, L.margin, credit2_y);
+    } else {
+        // -------- AMOLED BT layout (unchanged) --------
+        lv_obj_t* p_info = make_panel(ble_container, L.margin, L.content_y,
+                                      L.content_w, L.bt_info_panel_h);
 
-    lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
-    lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
-    lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
-    lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
-    lv_obj_align(lbl_credit2, LV_ALIGN_BOTTOM_MID, 0, -20);
+        lv_obj_t* bt_img = lv_image_create(p_info);
+        lv_image_set_src(bt_img, &icon_bt_dsc);
+        lv_obj_set_pos(bt_img, 0, 0);
+
+        lbl_ble_status = lv_label_create(p_info);
+        lv_label_set_text(lbl_ble_status, "Initializing...");
+        lv_obj_set_style_text_font(lbl_ble_status, L.bt_status_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
+        lv_obj_set_pos(lbl_ble_status, 56, 2);
+
+        lbl_ble_device = lv_label_create(p_info);
+        lv_label_set_text(lbl_ble_device, "Device: ---");
+        lv_obj_set_style_text_font(lbl_ble_device, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_device, COL_DIM, 0);
+        lv_obj_set_pos(lbl_ble_device, 0, 64);
+
+        lbl_ble_mac = lv_label_create(p_info);
+        lv_label_set_text(lbl_ble_mac, "Address: ---");
+        lv_obj_set_style_text_font(lbl_ble_mac, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(lbl_ble_mac, COL_DIM, 0);
+        lv_obj_set_pos(lbl_ble_mac, 0, 100);
+
+        int reset_y = L.content_y + L.bt_info_panel_h + 16;
+        lv_obj_t* reset_zone = lv_obj_create(ble_container);
+        lv_obj_set_pos(reset_zone, L.margin, reset_y);
+        lv_obj_set_size(reset_zone, L.content_w, L.bt_reset_zone_h);
+        lv_obj_set_style_bg_color(reset_zone, COL_PANEL, 0);
+        lv_obj_set_style_bg_opa(reset_zone, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(reset_zone, 8, 0);
+        lv_obj_set_style_border_width(reset_zone, 0, 0);
+        lv_obj_set_style_pad_column(reset_zone, 14, 0);
+        lv_obj_set_flex_flow(reset_zone, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(reset_zone, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_clear_flag(reset_zone, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(reset_zone, ble_reset_click_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t* trash_img = lv_image_create(reset_zone);
+        lv_image_set_src(trash_img, &icon_trash_dsc);
+
+        lv_obj_t* reset_lbl = lv_label_create(reset_zone);
+        lv_label_set_text(reset_lbl, "Reset Bluetooth");
+        lv_obj_set_style_text_font(reset_lbl, L.bt_device_font, 0);
+        lv_obj_set_style_text_color(reset_lbl, COL_DIM, 0);
+
+        lv_obj_t* lbl_credit = lv_label_create(ble_container);
+        lv_label_set_text(lbl_credit, "Built by @hermannbjorgvin");
+        lv_obj_set_style_text_font(lbl_credit, L.bt_credit_1_font, 0);
+        lv_obj_set_style_text_color(lbl_credit, COL_DIM, 0);
+        lv_obj_align(lbl_credit, LV_ALIGN_BOTTOM_MID, 0, -46);
+
+        lv_obj_t* lbl_credit2 = lv_label_create(ble_container);
+        lv_label_set_text(lbl_credit2, "Clawd animation by @amaanbuilds");
+        lv_obj_set_style_text_font(lbl_credit2, L.bt_credit_2_font, 0);
+        lv_obj_set_style_text_color(lbl_credit2, COL_DIM, 0);
+        lv_obj_align(lbl_credit2, LV_ALIGN_BOTTOM_MID, 0, -20);
+    }
 
     lv_obj_add_flag(ble_container, LV_OBJ_FLAG_HIDDEN);
 }
@@ -772,22 +890,30 @@ screen_t ui_get_current_screen(void) {
 }
 
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
+    // On slow_refresh (e-paper) boards the 1bpp inversion threshold (128
+    // luminance) eats anti-aliased glyph edges from mid-luminance colours
+    // and renders below-threshold colours as invisible-white. The four
+    // state colours have luminances ~129 (green), ~145 (amber), ~95 (red,
+    // BELOW threshold — would render invisible) and ~177 (dim, edges
+    // eaten). Force COL_TEXT on those boards so the status text always
+    // stays crisp and visible; AMOLED keeps the semantic colours.
+    const bool slow = board_caps().slow_refresh;
     switch (state) {
     case BLE_STATE_CONNECTED:
         lv_label_set_text(lbl_ble_status, "Connected");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_GREEN, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, slow ? COL_TEXT : COL_GREEN, 0);
         break;
     case BLE_STATE_ADVERTISING:
         lv_label_set_text(lbl_ble_status, "Advertising...");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_AMBER, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, slow ? COL_TEXT : COL_AMBER, 0);
         break;
     case BLE_STATE_DISCONNECTED:
         lv_label_set_text(lbl_ble_status, "Disconnected");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_RED, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, slow ? COL_TEXT : COL_RED, 0);
         break;
     default:
         lv_label_set_text(lbl_ble_status, "Initializing...");
-        lv_obj_set_style_text_color(lbl_ble_status, COL_DIM, 0);
+        lv_obj_set_style_text_color(lbl_ble_status, slow ? COL_TEXT : COL_DIM, 0);
         break;
     }
 
