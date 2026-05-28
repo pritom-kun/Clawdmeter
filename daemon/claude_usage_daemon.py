@@ -49,7 +49,7 @@ API_BODY = {
     "messages": [{"role": "user", "content": "hi"}],
 }
 
-OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+OAUTH_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # public Claude Code OAuth client id
 TOKEN_REFRESH_SKEW_SECONDS = 300  # refresh if token expires within 5 minutes
 _MIN_REFRESH_INTERVAL = 30        # clock-skew floor — never refresh more than once per 30s
