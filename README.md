@@ -169,6 +169,14 @@ runs at user logon via `python.exe` (a console window may briefly appear at logo
 Logs go to `%LOCALAPPDATA%\Clawdmeter\logs\`. Pass `-SkipPrimeRun` to
 skip the optional foreground priming scan.
 
+After registering the Scheduled Task, the installer prompts you to set up a long-lived OAuth token
+via [`claude setup-token`](https://code.claude.com/docs/en/authentication#generate-a-long-lived-token).
+This token lasts roughly one year and bypasses the per-hour OAuth refresh cycle that can fail on
+Windows (Claude Code 2.x stores live OAuth state in Chromium safeStorage and does not update
+`~\.claude\.credentials.json`, so the refresh token there rots quickly). A Pro, Max, Team, or
+Enterprise subscription is required. Pass `-SkipTokenSetup` if you want to defer and use the
+`.credentials.json` fallback instead.
+
 ### Manage the task
 
 ```powershell

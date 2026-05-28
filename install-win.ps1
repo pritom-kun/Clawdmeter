@@ -8,13 +8,21 @@
   on failure, and starts it. Mirrors install-mac.sh.
 .PARAMETER SkipPrimeRun
   Skip the optional foreground priming scan after installation.
+.PARAMETER SkipTokenSetup
+  Skip the long-lived OAuth token setup phase. The daemon will fall back
+  to .credentials.json (subject to the documented refresh issues on Windows).
 .EXAMPLE
   .\install-win.ps1
 .EXAMPLE
   .\install-win.ps1 -SkipPrimeRun
+.EXAMPLE
+  .\install-win.ps1 -SkipTokenSetup
 #>
 [CmdletBinding()]
-param([switch]$SkipPrimeRun)
+param(
+    [switch]$SkipPrimeRun,
+    [switch]$SkipTokenSetup
+)
 $ErrorActionPreference = 'Stop'
 
 $RepoDir    = $PSScriptRoot
@@ -200,6 +208,58 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 
 Write-Host "  Registered: $TaskName"
+Write-Host ""
+
+# ── Phase 3.5/5: Long-lived OAuth token setup ───────────────────────────────
+Write-Host "[3.5/5] Long-lived OAuth token"
+
+$tokenPath = Join-Path $env:USERPROFILE '.claude\.clawdmeter-oauth-token'
+$tokenAlreadySet = ($env:CLAUDE_CODE_OAUTH_TOKEN -and $env:CLAUDE_CODE_OAUTH_TOKEN.Trim()) -or (Test-Path $tokenPath)
+
+if ($SkipTokenSetup) {
+    Write-Host "  Skipping token setup (-SkipTokenSetup). Daemon will fall back to .credentials.json."
+    Write-Host "  Note: on Windows, .credentials.json may contain a stale refresh token that returns"
+    Write-Host "  400 invalid_grant. Run .\install-win.ps1 again (without -SkipTokenSetup) to set up a token."
+} elseif ($tokenAlreadySet) {
+    Write-Host "  Long-lived token already configured."
+} else {
+    Write-Host "  Configure a long-lived OAuth token now? (recommended) [Y/n] " -NoNewline
+    $ans = Read-Host
+    if ($ans -match '^[Nn]') {
+        Write-Host "  Skipped. The daemon will fall back to .credentials.json."
+        Write-Host "  Note: on Windows, .credentials.json may contain a stale refresh token - see"
+        Write-Host "  https://code.claude.com/docs/en/authentication#generate-a-long-lived-token"
+    } else {
+        Write-Host ""
+        Write-Host "  Steps:"
+        Write-Host "    1. In a separate PowerShell window, run:  claude setup-token"
+        Write-Host "    2. Sign in via the browser when prompted."
+        Write-Host "    3. Copy the printed token (it begins with `"sk-ant-oat01-`")."
+        Write-Host "    4. Paste it here."
+        Write-Host ""
+
+        $tok = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $tok = Read-Host "  Token"
+            if ($tok -match '^sk-ant-oat01-') {
+                break
+            }
+            Write-Host "  Token does not look right (expected prefix sk-ant-oat01-). Try again ($attempt/3)."
+            $tok = $null
+        }
+
+        if ($null -eq $tok) {
+            Write-Host "Error: No valid token provided after 3 attempts."
+            exit 1
+        }
+
+        New-Item -ItemType Directory -Force (Split-Path $tokenPath -Parent) | Out-Null
+        Set-Content -Path $tokenPath -Value $tok -NoNewline -Encoding utf8
+        Write-Host "  Token saved to $tokenPath"
+        Write-Host "  This token lasts ~1 year. To rotate it, delete the file and re-run the installer."
+    }
+}
+
 Write-Host ""
 
 # ── Phase 4/5: Bluetooth pairing primer ─────────────────────────────────────
