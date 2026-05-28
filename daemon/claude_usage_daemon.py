@@ -49,6 +49,12 @@ API_BODY = {
     "messages": [{"role": "user", "content": "hi"}],
 }
 
+OAUTH_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # public Claude Code OAuth client id
+TOKEN_REFRESH_SKEW_SECONDS = 300  # refresh if token expires within 5 minutes
+_MIN_REFRESH_INTERVAL = 30        # clock-skew floor — never refresh more than once per 30s
+_last_refresh_at: float = 0.0
+
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -119,6 +125,113 @@ def _read_token_file() -> str | None:
         log(f"Error reading credentials: {e}")
         return None
     return _extract_access_token(raw)
+
+
+def _read_credentials_blob() -> dict | None:
+    try:
+        raw = CREDENTIALS_PATH.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except OSError as e:
+        log(f"Error reading credentials file: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        log(f"Error parsing credentials file: {e}")
+        return None
+
+
+def _token_is_fresh(creds: dict) -> bool:
+    try:
+        expires_at = creds["claudeAiOauth"]["expiresAt"]
+        return expires_at > (time.time() + TOKEN_REFRESH_SKEW_SECONDS) * 1000
+    except (KeyError, TypeError):
+        return False
+
+
+async def _refresh_token(refresh_token: str) -> dict | None:
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "claude-code/2.1.5",
+    }
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": OAUTH_CLIENT_ID,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.post(OAUTH_TOKEN_URL, headers=headers, json=body)
+    except httpx.HTTPError as e:
+        log(f"OAuth refresh request failed: {e}")
+        return None
+    if resp.status_code < 200 or resp.status_code >= 300:
+        body_text = resp.text[:200]
+        log(f"OAuth refresh HTTP {resp.status_code}: {body_text}")
+        if "cloudflare" in resp.text.lower():
+            log("OAuth refresh blocked by Cloudflare WAF — try again later")
+        return None
+    return resp.json()
+
+
+def _persist_credentials(creds: dict) -> bool:
+    tmp = CREDENTIALS_PATH.parent / (CREDENTIALS_PATH.name + ".tmp." + str(os.getpid()))
+    try:
+        tmp.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+        os.replace(tmp, CREDENTIALS_PATH)
+        return True
+    except OSError as e:
+        log(f"Error persisting credentials: {e}")
+        return False
+
+
+async def get_valid_token(force_refresh: bool = False) -> str | None:
+    global _last_refresh_at
+    creds = _read_credentials_blob()
+    if not creds:
+        return None
+    oauth = creds.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        log("credentials.json missing claudeAiOauth block")
+        return None
+
+    current_access = oauth.get("accessToken")
+
+    if not force_refresh and _token_is_fresh(creds):
+        return current_access if isinstance(current_access, str) else None
+
+    # clock-skew floor: don't hammer the OAuth endpoint
+    now = time.time()
+    if now - _last_refresh_at < _MIN_REFRESH_INTERVAL:
+        return current_access if isinstance(current_access, str) else None
+
+    refresh_tok = oauth.get("refreshToken")
+    if not isinstance(refresh_tok, str) or not refresh_tok:
+        log("no refreshToken in credentials; please re-run `claude` to authenticate")
+        return None
+
+    resp = await _refresh_token(refresh_tok)
+    _last_refresh_at = time.time()
+    if not resp:
+        log("token refresh failed; please re-run `claude` to authenticate")
+        return None
+
+    new_access = resp.get("access_token")
+    if not isinstance(new_access, str):
+        log(f"refresh response missing access_token: keys={list(resp.keys())}")
+        return None
+
+    oauth["accessToken"] = new_access
+    new_refresh = resp.get("refresh_token")
+    if isinstance(new_refresh, str) and new_refresh:
+        oauth["refreshToken"] = new_refresh
+    expires_in = resp.get("expires_in")
+    if isinstance(expires_in, (int, float)):
+        oauth["expiresAt"] = int((time.time() + float(expires_in)) * 1000)
+    creds["claudeAiOauth"] = oauth
+
+    if not _persist_credentials(creds):
+        log("failed to persist refreshed credentials; using token in memory only")
+    log("OAuth token refreshed successfully")
+    return new_access
 
 
 def read_token() -> str | None:
@@ -257,11 +370,16 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                token = read_token()
+                token = read_token() if sys.platform == "darwin" else await get_valid_token()
                 if not token:
                     log("No token; skipping poll")
                 else:
                     payload = await poll_api(token)
+                    if payload is None and sys.platform != "darwin":
+                        # could be transient or 401 — force a refresh and retry once
+                        token = await get_valid_token(force_refresh=True)
+                        if token:
+                            payload = await poll_api(token)
                     if payload is not None:
                         if await session.write_payload(payload):
                             last_poll = time.time()
