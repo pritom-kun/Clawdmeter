@@ -140,7 +140,8 @@ def _read_long_lived_token() -> str | None:
         return env_tok.strip()
     try:
         raw = LONG_LIVED_TOKEN_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError) as e:
+        log(f"Long-lived token file unreadable: {e}")
         return None
     return raw or None
 
@@ -416,14 +417,16 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                token = _read_long_lived_token()
-                if not token:
+                ll_token = _read_long_lived_token()
+                if ll_token:
+                    token = ll_token
+                else:
                     token = read_token() if sys.platform == "darwin" else await get_valid_token()
                 if not token:
                     log("No token; skipping poll")
                 else:
                     payload = await poll_api(token)
-                    if payload is None and sys.platform != "darwin" and not _read_long_lived_token():
+                    if payload is None and sys.platform != "darwin" and not ll_token:
                         # Covers 401 and transient errors; _MIN_REFRESH_INTERVAL prevents hammering OAuth.
                         token = await get_valid_token(force_refresh=True)
                         if token:

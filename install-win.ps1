@@ -216,12 +216,12 @@ Write-Host "[3.5/5] Long-lived OAuth token"
 $tokenPath = Join-Path $env:USERPROFILE '.claude\.clawdmeter-oauth-token'
 $tokenAlreadySet = ($env:CLAUDE_CODE_OAUTH_TOKEN -and $env:CLAUDE_CODE_OAUTH_TOKEN.Trim()) -or (Test-Path $tokenPath)
 
-if ($SkipTokenSetup) {
+if ($tokenAlreadySet) {
+    Write-Host "  Long-lived token already configured."
+} elseif ($SkipTokenSetup) {
     Write-Host "  Skipping token setup (-SkipTokenSetup). Daemon will fall back to .credentials.json."
     Write-Host "  Note: on Windows, .credentials.json may contain a stale refresh token that returns"
     Write-Host "  400 invalid_grant. Run .\install-win.ps1 again (without -SkipTokenSetup) to set up a token."
-} elseif ($tokenAlreadySet) {
-    Write-Host "  Long-lived token already configured."
 } else {
     Write-Host "  Configure a long-lived OAuth token now? (recommended) [Y/n] " -NoNewline
     $ans = Read-Host
@@ -244,7 +244,11 @@ if ($SkipTokenSetup) {
             if ($tok -match '^sk-ant-oat01-') {
                 break
             }
-            Write-Host "  Token does not look right (expected prefix sk-ant-oat01-). Try again ($attempt/3)."
+            if ($attempt -lt 3) {
+                Write-Host "  Invalid token format (expected prefix sk-ant-oat01-). Try again ($attempt/3)."
+            } else {
+                Write-Host "  Invalid token format (expected prefix sk-ant-oat01-) ($attempt/3); aborting."
+            }
             $tok = $null
         }
 
