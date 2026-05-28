@@ -248,9 +248,13 @@ async def get_valid_token(force_refresh: bool = False) -> str | None:
     new_refresh = resp.get("refresh_token")
     if isinstance(new_refresh, str) and new_refresh:
         oauth["refreshToken"] = new_refresh
+    # RFC 6749 lets refresh_token grant responses omit expires_in (token inherits
+    # the original lifetime); fall back to 1 h so _token_is_fresh doesn't loop us
+    # straight back into another refresh on the next poll.
     expires_in = resp.get("expires_in")
-    if isinstance(expires_in, (int, float)):
-        oauth["expiresAt"] = int((time.time() + float(expires_in)) * 1000)
+    if not isinstance(expires_in, (int, float)):
+        expires_in = 3600
+    oauth["expiresAt"] = int((time.time() + float(expires_in)) * 1000)
     creds["claudeAiOauth"] = oauth
 
     if not _persist_credentials(creds):
