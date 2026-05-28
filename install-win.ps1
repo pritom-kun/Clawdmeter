@@ -188,13 +188,14 @@ $xml = $xml.Replace('__REPODIR__',  $RepoDir)
 try {
     Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force -ErrorAction Stop | Out-Null
 } catch {
+    # Separate our message from any partial output Register-ScheduledTask may have written.
     Write-Host ""
-    Write-Host "Error: Failed to register Scheduled Task." -ForegroundColor Red
+    Write-Host "Error: Failed to register Scheduled Task."
     Write-Host "  $($_.Exception.Message)"
     exit 1
 }
 if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
-    Write-Host "Error: Task '$TaskName' was not registered despite no error." -ForegroundColor Red
+    Write-Host "Error: Task '$TaskName' was not registered despite no error."
     exit 1
 }
 
