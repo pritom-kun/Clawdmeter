@@ -278,6 +278,26 @@ if (-not $SkipPrimeRun) {
     Write-Host "Run a 10-second test scan now? [Y/n] " -NoNewline
     $ans = Read-Host
     if ($ans -notmatch '^[Nn]') {
+        # The background task may already be running (re-install, or a prior
+        # session). The ESP32 accepts only one BLE connection at a time, so a
+        # running daemon and this foreground scan fight over the slot -- the
+        # scan ends up connected but unable to see any GATT characteristic.
+        # Stop the task and wait for the daemon to release the link first;
+        # phase 5 restarts it afterward.
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        $running = @()
+        for ($i = 0; $i -lt 20; $i++) {
+            $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -in @('python.exe', 'pythonw.exe') -and $_.CommandLine -like '*claude_usage_daemon*' })
+            if ($running.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 300
+        }
+        if ($running.Count -gt 0) {
+            # Force-kill stragglers so the scan gets exclusive device access.
+            $running | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Milliseconds 500
+        }
+
         Write-Host "  Starting foreground scan. Press Ctrl+C when you've seen 'Scanning...' and the device get discovered."
         try {
             Start-Process -FilePath $PythonBin -ArgumentList "`"$DaemonPy`"" -NoNewWindow -Wait
