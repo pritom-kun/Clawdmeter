@@ -258,7 +258,10 @@ if ($tokenAlreadySet) {
         }
 
         New-Item -ItemType Directory -Force (Split-Path $tokenPath -Parent) | Out-Null
-        Set-Content -Path $tokenPath -Value $tok -NoNewline -Encoding utf8
+        # PowerShell 5.1's `Set-Content -Encoding utf8` writes a UTF-8 BOM,
+        # which the daemon would otherwise prepend to the Bearer header.
+        # Write BOM-less UTF-8 via .NET so both PS 5.1 and PS 7+ behave the same.
+        [IO.File]::WriteAllText($tokenPath, $tok, (New-Object Text.UTF8Encoding $false))
         Write-Host "  Token saved to $tokenPath"
         Write-Host "  This token lasts ~1 year. To rotate it, delete the file and re-run the installer."
     }

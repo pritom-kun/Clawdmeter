@@ -139,7 +139,10 @@ def _read_long_lived_token() -> str | None:
     if isinstance(env_tok, str) and env_tok.strip():
         return env_tok.strip()
     try:
-        raw = LONG_LIVED_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        # utf-8-sig auto-strips a UTF-8 BOM if the installer wrote one
+        # (PowerShell 5.1's `Set-Content -Encoding utf8` does — preserving
+        # ﻿ would prepend it to the Bearer header and fail auth).
+        raw = LONG_LIVED_TOKEN_FILE.read_text(encoding="utf-8-sig").strip()
     except (OSError, UnicodeDecodeError) as e:
         log(f"Long-lived token file unreadable: {e}")
         return None
