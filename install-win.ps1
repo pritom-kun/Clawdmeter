@@ -161,7 +161,7 @@ $xmlTemplate = @'
         <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
         <Priority>7</Priority>
         <RestartOnFailure>
-            <Interval>PT10S</Interval>
+            <Interval>PT1M</Interval>
             <Count>999</Count>
         </RestartOnFailure>
         <Enabled>true</Enabled>
@@ -185,7 +185,18 @@ $xml = $xml.Replace('__LOGOUT__',   $LogOut)
 $xml = $xml.Replace('__LOGERR__',   $LogErr)
 $xml = $xml.Replace('__REPODIR__',  $RepoDir)
 
-Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force | Out-Null
+try {
+    Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force -ErrorAction Stop | Out-Null
+} catch {
+    Write-Host ""
+    Write-Host "Error: Failed to register Scheduled Task." -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)"
+    exit 1
+}
+if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
+    Write-Host "Error: Task '$TaskName' was not registered despite no error." -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "  Registered: $TaskName"
 Write-Host ""
