@@ -68,24 +68,38 @@ def _redirect_windows_logs() -> None:
     passed as argv[1] by install-win.ps1 ($LogDir); we fall back to the same
     %LOCALAPPDATA%\\Clawdmeter\\logs convention the installer uses. No-op on
     every other platform / when a real console is attached.
+
+    Once entered (pythonw, stdout is None) we must NEVER leave stdout/stderr
+    as None: a later log() would raise AttributeError and crash the daemon
+    with no window and no log to explain it. If the real log files can't be
+    opened, fall back to os.devnull so the daemon keeps running.
     """
     if sys.platform != "win32" or sys.stdout is not None:
         return
+    out_target = err_target = os.devnull
     try:
         if len(sys.argv) > 1 and sys.argv[1].strip():
             log_dir = Path(sys.argv[1])
         else:
             base = os.environ.get("LOCALAPPDATA")
-            if not base:
-                return
-            log_dir = Path(base) / "Clawdmeter" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        # append (matches the old cmd.exe `>>`), line-buffered, UTF-8
-        sys.stdout = open(log_dir / "claude-usage-daemon.out.log", "a", encoding="utf-8", buffering=1)
-        sys.stderr = open(log_dir / "claude-usage-daemon.err.log", "a", encoding="utf-8", buffering=1)
+            log_dir = Path(base) / "Clawdmeter" / "logs" if base else None
+        if log_dir is not None:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            out_target = log_dir / "claude-usage-daemon.out.log"
+            err_target = log_dir / "claude-usage-daemon.err.log"
     except OSError:
-        # Headless with nowhere to log — let the daemon run anyway.
-        pass
+        pass  # couldn't prepare the log dir — fall back to devnull below
+    # append (matches the old cmd.exe `>>`), line-buffered, UTF-8
+    try:
+        sys.stdout = open(out_target, "a", encoding="utf-8", buffering=1)
+        sys.stderr = open(err_target, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        # Last resort: keep the streams non-None so log() can't crash us.
+        try:
+            sys.stdout = open(os.devnull, "a")
+            sys.stderr = open(os.devnull, "a")
+        except OSError:
+            pass
 
 
 def _extract_access_token(blob: str) -> str | None:
