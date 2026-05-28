@@ -128,6 +128,23 @@ def _read_token_file() -> str | None:
     return _extract_access_token(raw)
 
 
+# `claude setup-token` prints a 1-year OAuth token but doesn't persist it.
+# We accept it from either the documented env var or a file we write during
+# install (for Scheduled Tasks, where env var propagation is unreliable).
+LONG_LIVED_TOKEN_FILE = Path.home() / ".claude" / ".clawdmeter-oauth-token"
+
+
+def _read_long_lived_token() -> str | None:
+    env_tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if isinstance(env_tok, str) and env_tok.strip():
+        return env_tok.strip()
+    try:
+        raw = LONG_LIVED_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return raw or None
+
+
 def _read_credentials_blob() -> dict | None:
     try:
         raw = CREDENTIALS_PATH.read_text(encoding="utf-8")
@@ -399,12 +416,14 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                token = read_token() if sys.platform == "darwin" else await get_valid_token()
+                token = _read_long_lived_token()
+                if not token:
+                    token = read_token() if sys.platform == "darwin" else await get_valid_token()
                 if not token:
                     log("No token; skipping poll")
                 else:
                     payload = await poll_api(token)
-                    if payload is None and sys.platform != "darwin":
+                    if payload is None and sys.platform != "darwin" and not _read_long_lived_token():
                         # Covers 401 and transient errors; _MIN_REFRESH_INTERVAL prevents hammering OAuth.
                         token = await get_valid_token(force_refresh=True)
                         if token:
