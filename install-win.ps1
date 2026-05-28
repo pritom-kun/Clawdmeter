@@ -275,7 +275,7 @@ Write-Host "  Pairing once in Settings is required for reliable WinRT GATT acces
 Write-Host ""
 
 if (-not $SkipPrimeRun) {
-    Write-Host "Run a 10-second test scan now? [Y/n] " -NoNewline
+    Write-Host "Run a one-time connection test now? It shows progress, then hands off to the background task. [Y/n] " -NoNewline
     $ans = Read-Host
     if ($ans -notmatch '^[Nn]') {
         # The background task may already be running (re-install, or a prior
@@ -298,9 +298,9 @@ if (-not $SkipPrimeRun) {
             Start-Sleep -Milliseconds 500
         }
 
-        Write-Host "  Starting foreground scan. Press Ctrl+C when you've seen 'Scanning...' and the device get discovered."
+        Write-Host "  Connecting to the device (shows progress, then exits automatically once the first update is sent)..."
         try {
-            Start-Process -FilePath $PythonBin -ArgumentList "`"$DaemonPy`"" -NoNewWindow -Wait
+            Start-Process -FilePath $PythonBin -ArgumentList "`"$DaemonPy`"", "--once" -NoNewWindow -Wait
         } catch {
             # Start-Process can throw if the process can't start; carry on.
             Write-Host "  Priming run skipped: $_"

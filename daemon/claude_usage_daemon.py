@@ -61,7 +61,7 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _redirect_windows_logs() -> None:
+def _redirect_windows_logs(log_dir_arg: str | None) -> None:
     """When the Scheduled Task launches us via pythonw.exe there is no
     console, so `sys.stdout`/`sys.stderr` are None and the task can't do a
     `>>` redirect. Reopen them onto log files ourselves. The log directory is
@@ -78,8 +78,8 @@ def _redirect_windows_logs() -> None:
         return
     out_target = err_target = os.devnull
     try:
-        if len(sys.argv) > 1 and sys.argv[1].strip():
-            log_dir = Path(sys.argv[1])
+        if log_dir_arg and log_dir_arg.strip():
+            log_dir = Path(log_dir_arg)
         else:
             base = os.environ.get("LOCALAPPDATA")
             log_dir = Path(base) / "Clawdmeter" / "logs" if base else None
@@ -430,7 +430,7 @@ class Session:
             return False
 
 
-async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
+async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = False) -> bool:
     """Connect to a known address and poll until disconnected or stopped.
 
     Returns True if the connection was used successfully (so the caller
@@ -479,6 +479,8 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
                         if await session.write_payload(payload):
                             last_poll = time.time()
                             used_successfully = True
+                            if once:
+                                break
 
             try:
                 await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
@@ -494,7 +496,7 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
     return used_successfully
 
 
-async def main() -> None:
+async def main(once: bool = False) -> None:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -510,6 +512,8 @@ async def main() -> None:
 
     log("=== Claude Usage Tracker Daemon (BLE) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
+    if once:
+        log("Priming run: will exit after the first usage update is sent")
 
     backoff = 1
     while not stop_event.is_set():
@@ -527,7 +531,10 @@ async def main() -> None:
                 backoff = min(backoff * 2, 60)
                 continue
 
-        ok = await connect_and_run(address, stop_event)
+        ok = await connect_and_run(address, stop_event, once=once)
+        if once and ok:
+            log("First usage update sent -- priming complete; the background task takes over now")
+            return
         if not ok:
             log("Invalidating cached address")
             SAVED_ADDR_FILE.unlink(missing_ok=True)
@@ -541,8 +548,12 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    _redirect_windows_logs()
+    run_once = "--once" in sys.argv[1:]
+    # First non-flag positional arg is the log dir (passed by the installer
+    # to the windowless background task). Flags start with "-".
+    log_dir_arg = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+    _redirect_windows_logs(log_dir_arg)
     try:
-        asyncio.run(main())
+        asyncio.run(main(once=run_once))
     except KeyboardInterrupt:
         sys.exit(0)
