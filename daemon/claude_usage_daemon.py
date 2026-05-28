@@ -142,7 +142,7 @@ def _read_credentials_blob() -> dict | None:
 def _token_is_fresh(creds: dict) -> bool:
     try:
         expires_at = creds["claudeAiOauth"]["expiresAt"]
-        return expires_at > (time.time() + TOKEN_REFRESH_SKEW_SECONDS) * 1000
+        return expires_at > time.time() * 1000 + TOKEN_REFRESH_SKEW_SECONDS * 1000
     except (KeyError, TypeError):
         return False
 
@@ -169,7 +169,11 @@ async def _refresh_token(refresh_token: str) -> dict | None:
         if "cloudflare" in resp.text.lower():
             log("OAuth refresh blocked by Cloudflare WAF — try again later")
         return None
-    return resp.json()
+    data = resp.json()
+    if not isinstance(data, dict):
+        log(f"OAuth refresh returned unexpected type {type(data).__name__}")
+        return None
+    return data
 
 
 def _persist_credentials(creds: dict) -> bool:
@@ -181,6 +185,11 @@ def _persist_credentials(creds: dict) -> bool:
     except OSError as e:
         log(f"Error persisting credentials: {e}")
         return False
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 async def get_valid_token(force_refresh: bool = False) -> str | None:
@@ -376,7 +385,7 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
                 else:
                     payload = await poll_api(token)
                     if payload is None and sys.platform != "darwin":
-                        # could be transient or 401 — force a refresh and retry once
+                        # Covers 401 and transient errors; _MIN_REFRESH_INTERVAL prevents hammering OAuth.
                         token = await get_valid_token(force_refresh=True)
                         if token:
                             payload = await poll_api(token)
