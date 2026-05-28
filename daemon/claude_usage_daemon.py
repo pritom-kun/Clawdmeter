@@ -54,6 +54,7 @@ OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # public Claude Code O
 TOKEN_REFRESH_SKEW_SECONDS = 300  # refresh if token expires within 5 minutes
 _MIN_REFRESH_INTERVAL = 30        # clock-skew floor — never refresh more than once per 30s
 _last_refresh_at: float = 0.0
+_refresh_backoff_seconds: float = _MIN_REFRESH_INTERVAL  # extended after 429 etc.
 
 
 def log(msg: str) -> None:
@@ -148,6 +149,7 @@ def _token_is_fresh(creds: dict) -> bool:
 
 
 async def _refresh_token(refresh_token: str) -> dict | None:
+    global _refresh_backoff_seconds
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "claude-code/2.1.5",
@@ -162,17 +164,22 @@ async def _refresh_token(refresh_token: str) -> dict | None:
             resp = await http.post(OAUTH_TOKEN_URL, headers=headers, json=body)
     except httpx.HTTPError as e:
         log(f"OAuth refresh request failed: {e}")
+        _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)
         return None
     if resp.status_code < 200 or resp.status_code >= 300:
         body_text = resp.text[:200]
         log(f"OAuth refresh HTTP {resp.status_code}: {body_text}")
-        if "cloudflare" in resp.text.lower():
-            log("OAuth refresh blocked by Cloudflare WAF — try again later")
+        if resp.status_code == 429 or "cloudflare" in resp.text.lower():
+            log("OAuth refresh rate-limited — backing off 5 minutes")
+            _refresh_backoff_seconds = 300.0
+        else:
+            _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)
         return None
     data = resp.json()
     if not isinstance(data, dict):
         log(f"OAuth refresh returned unexpected type {type(data).__name__}")
         return None
+    _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)  # reset on success
     return data
 
 
@@ -207,10 +214,19 @@ async def get_valid_token(force_refresh: bool = False) -> str | None:
     if not force_refresh and _token_is_fresh(creds):
         return current_access if isinstance(current_access, str) else None
 
-    # clock-skew floor: don't hammer the OAuth endpoint
+    # Backoff floor: don't hammer the OAuth endpoint after a recent attempt.
     now = time.time()
-    if now - _last_refresh_at < _MIN_REFRESH_INTERVAL:
-        return current_access if isinstance(current_access, str) else None
+    backoff = _refresh_backoff_seconds
+    if now - _last_refresh_at < backoff:
+        # If the token is actually still usable, return it (this is the
+        # force_refresh-with-fresh-token case). Otherwise signal "no token"
+        # so the caller skips the poll instead of spamming /v1/messages
+        # with an expired token.
+        if _token_is_fresh(creds) and isinstance(current_access, str):
+            return current_access
+        remaining = int(backoff - (now - _last_refresh_at))
+        log(f"OAuth refresh recently failed; backing off (~{remaining}s remaining)")
+        return None
 
     refresh_tok = oauth.get("refreshToken")
     if not isinstance(refresh_tok, str) or not refresh_tok:
