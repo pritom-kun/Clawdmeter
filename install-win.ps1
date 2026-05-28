@@ -30,10 +30,9 @@ $TaskName   = 'Clawdmeter Daemon'
 $VenvDir    = Join-Path $RepoDir 'daemon\.venv'
 $DaemonPy   = Join-Path $RepoDir 'daemon\claude_usage_daemon.py'
 $LogDir     = Join-Path $env:LOCALAPPDATA 'Clawdmeter\logs'
-$LogOut     = Join-Path $LogDir 'claude-usage-daemon.out.log'
-$LogErr     = Join-Path $LogDir 'claude-usage-daemon.err.log'
 $CredsPath  = Join-Path $env:USERPROFILE '.claude\.credentials.json'
 $PythonBin  = Join-Path $VenvDir 'Scripts\python.exe'
+$PythonwBin = Join-Path $VenvDir 'Scripts\pythonw.exe'
 
 Write-Host "=== Clawdmeter Windows install ==="
 Write-Host ""
@@ -177,8 +176,8 @@ $xmlTemplate = @'
     </Settings>
     <Actions Context="Author">
         <Exec>
-            <Command>cmd.exe</Command>
-            <Arguments>/c "&quot;__PYTHON__&quot; &quot;__DAEMON__&quot; &gt;&gt; &quot;__LOGOUT__&quot; 2&gt;&gt; &quot;__LOGERR__&quot;"</Arguments>
+            <Command>__PYTHONW__</Command>
+            <Arguments>&quot;__DAEMON__&quot; &quot;__LOGDIR__&quot;</Arguments>
             <WorkingDirectory>__REPODIR__</WorkingDirectory>
         </Exec>
     </Actions>
@@ -187,10 +186,9 @@ $xmlTemplate = @'
 
 $xml = $xmlTemplate
 $xml = $xml.Replace('__USERID__',   $userId)
-$xml = $xml.Replace('__PYTHON__',   $PythonBin)
+$xml = $xml.Replace('__PYTHONW__',  $PythonwBin)
 $xml = $xml.Replace('__DAEMON__',   $DaemonPy)
-$xml = $xml.Replace('__LOGOUT__',   $LogOut)
-$xml = $xml.Replace('__LOGERR__',   $LogErr)
+$xml = $xml.Replace('__LOGDIR__',   $LogDir)
 $xml = $xml.Replace('__REPODIR__',  $RepoDir)
 
 try {

@@ -61,6 +61,33 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _redirect_windows_logs() -> None:
+    """When the Scheduled Task launches us via pythonw.exe there is no
+    console, so `sys.stdout`/`sys.stderr` are None and the task can't do a
+    `>>` redirect. Reopen them onto log files ourselves. The log directory is
+    passed as argv[1] by install-win.ps1 ($LogDir); we fall back to the same
+    %LOCALAPPDATA%\\Clawdmeter\\logs convention the installer uses. No-op on
+    every other platform / when a real console is attached.
+    """
+    if sys.platform != "win32" or sys.stdout is not None:
+        return
+    try:
+        if len(sys.argv) > 1 and sys.argv[1].strip():
+            log_dir = Path(sys.argv[1])
+        else:
+            base = os.environ.get("LOCALAPPDATA")
+            if not base:
+                return
+            log_dir = Path(base) / "Clawdmeter" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        # append (matches the old cmd.exe `>>`), line-buffered, UTF-8
+        sys.stdout = open(log_dir / "claude-usage-daemon.out.log", "a", encoding="utf-8", buffering=1)
+        sys.stderr = open(log_dir / "claude-usage-daemon.err.log", "a", encoding="utf-8", buffering=1)
+    except OSError:
+        # Headless with nowhere to log — let the daemon run anyway.
+        pass
+
+
 def _extract_access_token(blob: str) -> str | None:
     """Pull the accessToken out of a credentials blob.
 
@@ -500,6 +527,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    _redirect_windows_logs()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
