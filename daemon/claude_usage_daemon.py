@@ -170,7 +170,7 @@ async def _refresh_token(refresh_token: str) -> dict | None:
         body_text = resp.text[:200]
         log(f"OAuth refresh HTTP {resp.status_code}: {body_text}")
         if resp.status_code == 429 or "cloudflare" in resp.text.lower():
-            log("OAuth refresh rate-limited — backing off 5 minutes")
+            log("OAuth refresh rate-limited; backing off 5 minutes")
             _refresh_backoff_seconds = 300.0
         else:
             _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)
