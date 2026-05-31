@@ -438,7 +438,15 @@ async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = 
     cache should be invalidated.
     """
     log(f"Connecting to {address}...")
-    client = BleakClient(address)
+    # Windows/WinRT, unlike CoreBluetooth and BlueZ, does not auto-initiate
+    # bonding the first time an encrypted characteristic is accessed. The
+    # firmware's custom service requires bonding (NimBLE setSecurityAuth
+    # bond=true), so on an unbonded Windows host the GATT characteristics
+    # never resolve and every notify/write fails with "Characteristic ...
+    # was not found". Pairing on connect forces the bond up front. pair=True
+    # is idempotent (Bleak skips it when already bonded) and gated to Windows:
+    # pair() is unavailable on macOS and BlueZ bonds implicitly on access.
+    client = BleakClient(address, pair=sys.platform == "win32")
     try:
         await client.connect()
     except (BleakError, asyncio.TimeoutError) as e:
