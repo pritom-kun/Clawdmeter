@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Claude Usage Tracker Daemon (BLE) — macOS port of claude-usage-daemon.sh.
+"""Claude Usage Tracker Daemon (BLE) — cross-platform host daemon.
 
 Polls Claude API rate-limit headers and writes a JSON payload to the
 ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
-bleak (CoreBluetooth backend on macOS).
+bleak (CoreBluetooth on macOS, BlueZ on Linux, WinRT on Windows).
 """
 
 import asyncio
@@ -31,8 +31,8 @@ TICK = 5
 SCAN_TIMEOUT = 8.0
 
 # macOS: token lives in Keychain (service "Claude Code-credentials").
-# Linux: token lives in ~/.claude/.credentials.json.
-KEYCHAIN_SERVICE = "Claude Code-credentials"
+# Linux/Windows: token lives in ~/.claude/.credentials.json.
+KEYCHAIN_SERVICE = "Claude Code-credentials"  # darwin only — read via `security find-generic-password`
 CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 
@@ -49,9 +49,57 @@ API_BODY = {
     "messages": [{"role": "user", "content": "hi"}],
 }
 
+OAUTH_TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"  # public Claude Code OAuth client id
+TOKEN_REFRESH_SKEW_SECONDS = 300  # refresh if token expires within 5 minutes
+_MIN_REFRESH_INTERVAL = 30        # clock-skew floor — never refresh more than once per 30s
+_last_refresh_at: float = 0.0
+_refresh_backoff_seconds: float = _MIN_REFRESH_INTERVAL  # extended after 429 etc.
+
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _redirect_windows_logs(log_dir_arg: str | None) -> None:
+    """When the Scheduled Task launches us via pythonw.exe there is no
+    console, so `sys.stdout`/`sys.stderr` are None and the task can't do a
+    `>>` redirect. Reopen them onto log files ourselves. The log directory is
+    passed as argv[1] by install-win.ps1 ($LogDir); we fall back to the same
+    %LOCALAPPDATA%\\Clawdmeter\\logs convention the installer uses. No-op on
+    every other platform / when a real console is attached.
+
+    Once entered (pythonw, stdout is None) we must NEVER leave stdout/stderr
+    as None: a later log() would raise AttributeError and crash the daemon
+    with no window and no log to explain it. If the real log files can't be
+    opened, fall back to os.devnull so the daemon keeps running.
+    """
+    if sys.platform != "win32" or sys.stdout is not None:
+        return
+    out_target = err_target = os.devnull
+    try:
+        if log_dir_arg and log_dir_arg.strip():
+            log_dir = Path(log_dir_arg)
+        else:
+            base = os.environ.get("LOCALAPPDATA")
+            log_dir = Path(base) / "Clawdmeter" / "logs" if base else None
+        if log_dir is not None:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            out_target = log_dir / "claude-usage-daemon.out.log"
+            err_target = log_dir / "claude-usage-daemon.err.log"
+    except OSError:
+        pass  # couldn't prepare the log dir — fall back to devnull below
+    # append (matches the old cmd.exe `>>`), line-buffered, UTF-8
+    try:
+        sys.stdout = open(out_target, "a", encoding="utf-8", buffering=1)
+        sys.stderr = open(err_target, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        # Last resort: keep the streams non-None so log() can't crash us.
+        try:
+            sys.stdout = open(os.devnull, "a")
+            sys.stderr = open(os.devnull, "a")
+        except OSError:
+            pass
 
 
 def _extract_access_token(blob: str) -> str | None:
@@ -114,11 +162,167 @@ def _read_token_keychain() -> str | None:
 
 def _read_token_file() -> str | None:
     try:
-        raw = CREDENTIALS_PATH.read_text()
+        raw = CREDENTIALS_PATH.read_text(encoding="utf-8")
     except OSError as e:
         log(f"Error reading credentials: {e}")
         return None
     return _extract_access_token(raw)
+
+
+# `claude setup-token` prints a 1-year OAuth token but doesn't persist it.
+# We accept it from either the documented env var or a file we write during
+# install (for Scheduled Tasks, where env var propagation is unreliable).
+LONG_LIVED_TOKEN_FILE = Path.home() / ".claude" / ".clawdmeter-oauth-token"
+
+
+def _read_long_lived_token() -> str | None:
+    env_tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if isinstance(env_tok, str) and env_tok.strip():
+        return env_tok.strip()
+    try:
+        # utf-8-sig auto-strips a UTF-8 BOM if the installer wrote one
+        # (PowerShell 5.1's `Set-Content -Encoding utf8` does — preserving
+        # ﻿ would prepend it to the Bearer header and fail auth).
+        raw = LONG_LIVED_TOKEN_FILE.read_text(encoding="utf-8-sig").strip()
+    except (OSError, UnicodeDecodeError) as e:
+        log(f"Long-lived token file unreadable: {e}")
+        return None
+    return raw or None
+
+
+def _read_credentials_blob() -> dict | None:
+    try:
+        raw = CREDENTIALS_PATH.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except OSError as e:
+        log(f"Error reading credentials file: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        log(f"Error parsing credentials file: {e}")
+        return None
+
+
+def _token_is_fresh(creds: dict) -> bool:
+    try:
+        expires_at = creds["claudeAiOauth"]["expiresAt"]
+        return expires_at > time.time() * 1000 + TOKEN_REFRESH_SKEW_SECONDS * 1000
+    except (KeyError, TypeError):
+        return False
+
+
+async def _refresh_token(refresh_token: str) -> dict | None:
+    global _refresh_backoff_seconds
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "claude-code/2.1.5",
+    }
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": OAUTH_CLIENT_ID,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            resp = await http.post(OAUTH_TOKEN_URL, headers=headers, json=body)
+    except httpx.HTTPError as e:
+        log(f"OAuth refresh request failed: {e}")
+        _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)
+        return None
+    if resp.status_code < 200 or resp.status_code >= 300:
+        body_text = resp.text[:200]
+        log(f"OAuth refresh HTTP {resp.status_code}: {body_text}")
+        if resp.status_code == 429 or "cloudflare" in resp.text.lower():
+            log("OAuth refresh rate-limited; backing off 5 minutes")
+            _refresh_backoff_seconds = 300.0
+        else:
+            _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)
+        return None
+    data = resp.json()
+    if not isinstance(data, dict):
+        log(f"OAuth refresh returned unexpected type {type(data).__name__}")
+        return None
+    _refresh_backoff_seconds = float(_MIN_REFRESH_INTERVAL)  # reset on success
+    return data
+
+
+def _persist_credentials(creds: dict) -> bool:
+    tmp = CREDENTIALS_PATH.parent / (CREDENTIALS_PATH.name + ".tmp." + str(os.getpid()))
+    try:
+        tmp.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+        os.replace(tmp, CREDENTIALS_PATH)
+        return True
+    except OSError as e:
+        log(f"Error persisting credentials: {e}")
+        return False
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+async def get_valid_token(force_refresh: bool = False) -> str | None:
+    global _last_refresh_at
+    creds = _read_credentials_blob()
+    if not creds:
+        return None
+    oauth = creds.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        log("credentials.json missing claudeAiOauth block")
+        return None
+
+    current_access = oauth.get("accessToken")
+
+    if not force_refresh and _token_is_fresh(creds):
+        return current_access if isinstance(current_access, str) else None
+
+    # Backoff floor: don't hammer the OAuth endpoint after a recent attempt.
+    now = time.time()
+    backoff = _refresh_backoff_seconds
+    if now - _last_refresh_at < backoff:
+        # If the token is actually still usable, return it (this is the
+        # force_refresh-with-fresh-token case). Otherwise signal "no token"
+        # so the caller skips the poll instead of spamming /v1/messages
+        # with an expired token.
+        if _token_is_fresh(creds) and isinstance(current_access, str):
+            return current_access
+        remaining = int(backoff - (now - _last_refresh_at))
+        log(f"OAuth refresh recently failed; backing off (~{remaining}s remaining)")
+        return None
+
+    refresh_tok = oauth.get("refreshToken")
+    if not isinstance(refresh_tok, str) or not refresh_tok:
+        log("no refreshToken in credentials; please re-run `claude` to authenticate")
+        return None
+
+    resp = await _refresh_token(refresh_tok)
+    _last_refresh_at = time.time()
+    if not resp:
+        log("token refresh failed; please re-run `claude` to authenticate")
+        return None
+
+    new_access = resp.get("access_token")
+    if not isinstance(new_access, str):
+        log(f"refresh response missing access_token: keys={list(resp.keys())}")
+        return None
+
+    oauth["accessToken"] = new_access
+    new_refresh = resp.get("refresh_token")
+    if isinstance(new_refresh, str) and new_refresh:
+        oauth["refreshToken"] = new_refresh
+    # RFC 6749 lets refresh_token grant responses omit expires_in (token inherits
+    # the original lifetime); fall back to 1 h so _token_is_fresh doesn't loop us
+    # straight back into another refresh on the next poll.
+    expires_in = resp.get("expires_in")
+    if not isinstance(expires_in, (int, float)):
+        expires_in = 3600
+    oauth["expiresAt"] = int((time.time() + float(expires_in)) * 1000)
+    creds["claudeAiOauth"] = oauth
+
+    if not _persist_credentials(creds):
+        log("failed to persist refreshed credentials; using token in memory only")
+    log("OAuth token refreshed successfully")
+    return new_access
 
 
 def read_token() -> str | None:
@@ -218,15 +422,24 @@ class Session:
     async def write_payload(self, payload: dict) -> bool:
         data = json.dumps(payload, separators=(",", ":")).encode()
         log(f"Sending: {data.decode()}")
+        # WriteWithoutResponse (response=False) has no ATT-level flow control on
+        # WinRT: after the first packet the rest are silently dropped with no
+        # error raised, so the device freezes on the first value while the
+        # daemon keeps "sending". Use an acknowledged write on Windows so each
+        # payload is confirmed end-to-end (and a genuine failure now surfaces as
+        # "Write failed" instead of vanishing). macOS/Linux keep the cheaper
+        # no-response write, which is reliable on those stacks.
         try:
-            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            await self.client.write_gatt_char(
+                RX_CHAR_UUID, data, response=sys.platform == "win32"
+            )
             return True
         except BleakError as e:
             log(f"Write failed: {e}")
             return False
 
 
-async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
+async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = False) -> bool:
     """Connect to a known address and poll until disconnected or stopped.
 
     Returns True if the connection was used successfully (so the caller
@@ -234,7 +447,27 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
     cache should be invalidated.
     """
     log(f"Connecting to {address}...")
-    client = BleakClient(address)
+    # Windows/WinRT needs two nudges that CoreBluetooth and BlueZ don't:
+    #
+    #  1. pair=True -- WinRT does not auto-bond when an encrypted characteristic
+    #     is first accessed. The firmware's custom service requires bonding
+    #     (NimBLE setSecurityAuth bond=true), so an unbonded host can't resolve
+    #     the characteristics at all. Idempotent: Bleak skips it when bonded.
+    #
+    #  2. use_cached_services=False -- once bonded, WinRT caches the GATT table
+    #     per device, and that cache can go stale (the characteristics drop out
+    #     of it) while the bond + service node stay in Windows' device tree.
+    #     That makes start_notify/write_gatt_char fail with "Characteristic ...
+    #     was not found" even though the device is fully paired and the service
+    #     is enumerated. Forcing uncached discovery re-reads the live table from
+    #     the device on every connect instead of trusting the cache.
+    #
+    # Both are gated to Windows: pair() is unavailable on macOS, BlueZ bonds
+    # implicitly, and neither platform needs the cache override.
+    if sys.platform == "win32":
+        client = BleakClient(address, pair=True, winrt={"use_cached_services": False})
+    else:
+        client = BleakClient(address)
     try:
         await client.connect()
     except (BleakError, asyncio.TimeoutError) as e:
@@ -257,15 +490,26 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                token = read_token()
+                ll_token = _read_long_lived_token()
+                if ll_token:
+                    token = ll_token
+                else:
+                    token = read_token() if sys.platform == "darwin" else await get_valid_token()
                 if not token:
                     log("No token; skipping poll")
                 else:
                     payload = await poll_api(token)
+                    if payload is None and sys.platform != "darwin" and not ll_token:
+                        # Covers 401 and transient errors; _MIN_REFRESH_INTERVAL prevents hammering OAuth.
+                        token = await get_valid_token(force_refresh=True)
+                        if token:
+                            payload = await poll_api(token)
                     if payload is not None:
                         if await session.write_payload(payload):
                             last_poll = time.time()
                             used_successfully = True
+                            if once:
+                                break
 
             try:
                 await asyncio.wait_for(session.refresh_requested.wait(), timeout=TICK)
@@ -281,7 +525,7 @@ async def connect_and_run(address: str, stop_event: asyncio.Event) -> bool:
     return used_successfully
 
 
-async def main() -> None:
+async def main(once: bool = False) -> None:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -295,8 +539,10 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, _stop)
 
-    log("=== Claude Usage Tracker Daemon (BLE, macOS) ===")
+    log("=== Claude Usage Tracker Daemon (BLE) ===")
     log(f"Poll interval: {POLL_INTERVAL}s")
+    if once:
+        log("Priming run: will exit after the first usage update is sent")
 
     backoff = 1
     while not stop_event.is_set():
@@ -314,7 +560,10 @@ async def main() -> None:
                 backoff = min(backoff * 2, 60)
                 continue
 
-        ok = await connect_and_run(address, stop_event)
+        ok = await connect_and_run(address, stop_event, once=once)
+        if once and ok:
+            log("First usage update sent -- priming complete; the background task takes over now")
+            return
         if not ok:
             log("Invalidating cached address")
             SAVED_ADDR_FILE.unlink(missing_ok=True)
@@ -328,7 +577,12 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    run_once = "--once" in sys.argv[1:]
+    # First non-flag positional arg is the log dir (passed by the installer
+    # to the windowless background task). Flags start with "-".
+    log_dir_arg = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
+    _redirect_windows_logs(log_dir_arg)
     try:
-        asyncio.run(main())
+        asyncio.run(main(once=run_once))
     except KeyboardInterrupt:
         sys.exit(0)
