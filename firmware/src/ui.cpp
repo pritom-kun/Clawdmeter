@@ -879,10 +879,11 @@ void ui_tick_anim(void) {
     // The 60 s slow_refresh cadence was set when every UI update meant a
     // full-refresh flicker. The SSD1681 driver now does proper partial
     // refresh for animation updates (epd_partial_refresh, no inversion
-    // flash, ~300 ms), so animation can run at near-AMOLED speed —
-    // capped at 1 s minimum so partial refreshes don't queue up.
+    // flash, ~300 ms), so animation can run at near-AMOLED speed. The
+    // 500 ms spinner is about as fast as the panel's ~300 ms partial
+    // refresh can sustain — each tick blocks the loop for one refresh.
     const uint32_t msg_interval     = slow ? 5000 : ANIM_MSG_MS;
-    const uint32_t spinner_interval = slow ? 1000 : spinner_ms[anim_spinner_idx];
+    const uint32_t spinner_interval = slow ? 500  : spinner_ms[anim_spinner_idx];
 
     if (now - anim_msg_start >= msg_interval) {
         anim_msg_idx = (anim_msg_idx + 1) % ANIM_MSG_COUNT;

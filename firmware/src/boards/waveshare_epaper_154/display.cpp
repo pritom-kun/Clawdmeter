@@ -9,23 +9,25 @@
 #define FB_BYTES  ((LCD_WIDTH * LCD_HEIGHT) / 8)
 
 // Coalesce multi-region LVGL flushes from the same animation tick.
-// Must be SHORTER than the e-paper UI cadences (4s spinner, 8s message)
+// Must be SHORTER than the e-paper UI cadences (1s spinner, 5s message)
 // so settle reliably fires between ticks.
 #define SETTLE_MS  100
 
-// Full refresh trigger: fire whichever fires first. With partial refresh
-// driving the per-second spinner + 5-second message rotation in ui.cpp,
-// the panel hits ~75 partial refreshes per minute under normal activity;
-// keep these thresholds generous so the user only sees the inversion-
-// flicker full-refresh every few minutes for ghost clearance.
-#define FULL_REFRESH_INTERVAL_MS  300000  // 5 min — time-based ghost clearance
-#define MAX_PARTIALS_BEFORE_FULL  250     // ~3.5 min at 75 partials/min
+// Full refresh cadence — purely time-based. Every on-screen value update
+// (progress bar, usage %, rotating message, spinner) renders via a fast
+// partial refresh at its native frequency; the only full refresh — the
+// visible inversion flicker — fires on this timer solely to clear any
+// accumulated ghosting. Set to 10 min to spare the panel: full refreshes
+// stress the e-paper film far more than partials, so doing fewer of them
+// is gentler on display lifetime. (A 250-partial count previously forced
+// a full every ~4 min on the usage screen; removed — the timer alone
+// governs the cadence now.)
+#define FULL_REFRESH_INTERVAL_MS  600000  // 10 min — time-based ghost clearance
 
 static uint8_t* framebuf = nullptr;
 static bool     dirty = false;
 static uint32_t last_flush_ms = 0;
 static uint32_t last_full_refresh_ms = 0;
-static uint32_t partial_count = 0;
 static int      dirty_x1 = 0, dirty_y1 = 0, dirty_x2 = 0, dirty_y2 = 0;
 
 // Track whether the SSD1681 is currently in partial-refresh mode. Set
@@ -128,24 +130,21 @@ void display_hal_tick(void) {
     if (dirty_y2 >= LCD_HEIGHT) dirty_y2 = LCD_HEIGHT - 1;
 
     uint32_t now = millis();
-    bool time_for_full  = (now - last_full_refresh_ms) >= FULL_REFRESH_INTERVAL_MS;
-    bool count_for_full = partial_count >= MAX_PARTIALS_BEFORE_FULL;
+    bool time_for_full = (now - last_full_refresh_ms) >= FULL_REFRESH_INTERVAL_MS;
 
-    if (!partial_mode || time_for_full || count_for_full) {
-        // Cold start, ghost-clear cadence, or activity-burst safety
-        // override: redo a full refresh (loads full LUT + drives all
-        // pixels through the inversion sequence + seeds previous RAM)
-        // and then switch the chip back into partial mode for fast,
-        // flicker-free updates until the next full-refresh trigger.
+    if (!partial_mode || time_for_full) {
+        // Cold start or the 10-min ghost-clear timer: redo a full refresh
+        // (loads full LUT + drives all pixels through the inversion
+        // sequence + seeds previous RAM) and then switch the chip back
+        // into partial mode for fast, flicker-free updates until the
+        // timer next expires.
         epd_init();
         epd_full_refresh(framebuf);
         epd_init_partial();
         partial_mode = true;
         last_full_refresh_ms = now;
-        partial_count = 0;
     } else {
         epd_partial_refresh(framebuf, dirty_x1, dirty_y1, dirty_x2, dirty_y2);
-        partial_count++;
     }
     dirty = false;
 }
