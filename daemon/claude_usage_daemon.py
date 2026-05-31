@@ -447,15 +447,27 @@ async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = 
     cache should be invalidated.
     """
     log(f"Connecting to {address}...")
-    # Windows/WinRT, unlike CoreBluetooth and BlueZ, does not auto-initiate
-    # bonding the first time an encrypted characteristic is accessed. The
-    # firmware's custom service requires bonding (NimBLE setSecurityAuth
-    # bond=true), so on an unbonded Windows host the GATT characteristics
-    # never resolve and every notify/write fails with "Characteristic ...
-    # was not found". Pairing on connect forces the bond up front. pair=True
-    # is idempotent (Bleak skips it when already bonded) and gated to Windows:
-    # pair() is unavailable on macOS and BlueZ bonds implicitly on access.
-    client = BleakClient(address, pair=sys.platform == "win32")
+    # Windows/WinRT needs two nudges that CoreBluetooth and BlueZ don't:
+    #
+    #  1. pair=True -- WinRT does not auto-bond when an encrypted characteristic
+    #     is first accessed. The firmware's custom service requires bonding
+    #     (NimBLE setSecurityAuth bond=true), so an unbonded host can't resolve
+    #     the characteristics at all. Idempotent: Bleak skips it when bonded.
+    #
+    #  2. use_cached_services=False -- once bonded, WinRT caches the GATT table
+    #     per device, and that cache can go stale (the characteristics drop out
+    #     of it) while the bond + service node stay in Windows' device tree.
+    #     That makes start_notify/write_gatt_char fail with "Characteristic ...
+    #     was not found" even though the device is fully paired and the service
+    #     is enumerated. Forcing uncached discovery re-reads the live table from
+    #     the device on every connect instead of trusting the cache.
+    #
+    # Both are gated to Windows: pair() is unavailable on macOS, BlueZ bonds
+    # implicitly, and neither platform needs the cache override.
+    if sys.platform == "win32":
+        client = BleakClient(address, pair=True, winrt={"use_cached_services": False})
+    else:
+        client = BleakClient(address)
     try:
         await client.connect()
     except (BleakError, asyncio.TimeoutError) as e:
