@@ -422,8 +422,17 @@ class Session:
     async def write_payload(self, payload: dict) -> bool:
         data = json.dumps(payload, separators=(",", ":")).encode()
         log(f"Sending: {data.decode()}")
+        # WriteWithoutResponse (response=False) has no ATT-level flow control on
+        # WinRT: after the first packet the rest are silently dropped with no
+        # error raised, so the device freezes on the first value while the
+        # daemon keeps "sending". Use an acknowledged write on Windows so each
+        # payload is confirmed end-to-end (and a genuine failure now surfaces as
+        # "Write failed" instead of vanishing). macOS/Linux keep the cheaper
+        # no-response write, which is reliable on those stacks.
         try:
-            await self.client.write_gatt_char(RX_CHAR_UUID, data, response=False)
+            await self.client.write_gatt_char(
+                RX_CHAR_UUID, data, response=sys.platform == "win32"
+            )
             return True
         except BleakError as e:
             log(f"Write failed: {e}")
