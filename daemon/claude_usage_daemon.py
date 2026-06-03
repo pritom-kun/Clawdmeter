@@ -2,7 +2,7 @@
 """Claude Usage Tracker Daemon (BLE) — cross-platform host daemon.
 
 Polls Claude API rate-limit headers and writes a JSON payload to the
-ESP32 "Claude Controller" peripheral over a custom GATT service. Uses
+ESP32 "Clawdmeter" peripheral over a custom GATT service. Uses
 bleak (CoreBluetooth on macOS, BlueZ on Linux, WinRT on Windows).
 """
 
@@ -21,7 +21,7 @@ import httpx
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakError
 
-DEVICE_NAME = "Claude Controller"
+DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
 REQ_CHAR_UUID = "4c41555a-4465-7669-6365-000000000004"
@@ -361,6 +361,120 @@ async def scan_for_device() -> str | None:
     return None
 
 
+# --- macOS: recover a device the OS already holds as an HID keyboard --------
+#
+# The firmware advertises as a BLE HID keyboard so its buttons type into the
+# Mac. macOS auto-connects to that HID, and CoreBluetooth then EXCLUDES the
+# peripheral from BleakScanner.discover() results (already-connected devices
+# never appear in scans). bleak's connect-by-address path also scans
+# internally, so a cached address can't help either. The documented escape
+# hatch is retrieveConnectedPeripheralsWithServices_, which returns
+# peripherals the system is already connected to. We wrap the result in a
+# BLEDevice carrying the live (peripheral, manager) details so BleakClient
+# connects to it directly without scanning. CoreBluetooth shares the single
+# physical link, so this rides the existing HID connection — the keyboard
+# keeps working.
+_cb_manager = None  # reused CentralManagerDelegate (CoreBluetooth)
+
+
+async def _get_cb_manager():
+    """Lazily create and ready a shared CoreBluetooth central manager."""
+    global _cb_manager
+    if _cb_manager is None:
+        from bleak.backends.corebluetooth.CentralManagerDelegate import (
+            CentralManagerDelegate,
+        )
+
+        mgr = CentralManagerDelegate()
+        await mgr.wait_until_ready()  # raises if Bluetooth is unauthorized/off
+        _cb_manager = mgr
+    return _cb_manager
+
+
+async def retrieve_connected_macos(skip_addr: str | None = None):
+    """Return a BLEDevice for a system-connected 'Claude Controller', or None.
+
+    Two-step lookup, strongest signal first:
+
+    1. Peripherals connected under our CUSTOM service UUID. Membership in
+       that service is unambiguous (no other device exposes it), so we accept
+       by service alone — the peripheral's name can be None on macOS.
+    2. Fall back to the generic HID service 0x1812, but ONLY trust a
+       peripheral whose name matches DEVICE_NAME. 0x1812 also matches
+       unrelated keyboards/mice, so picking blindly here could grab the
+       wrong device.
+
+    ``skip_addr`` skips a peripheral whose UUID just failed to connect, so a
+    stale CoreBluetooth handle can't trap us into never trying a fresh scan.
+    """
+    from CoreBluetooth import CBUUID
+    from bleak.backends.device import BLEDevice
+
+    try:
+        manager = await _get_cb_manager()
+    except Exception as e:  # BleakBluetoothNotAvailableError etc.
+        log(f"CoreBluetooth unavailable: {e}")
+        return None
+
+    cm = manager.central_manager
+
+    def _wrap(p):
+        addr = p.identifier().UUIDString()
+        log(f"Found system-connected peripheral: {p.name()!r} [{addr}]")
+        return BLEDevice(addr, p.name(), (p, manager))
+
+    def _ok(p) -> bool:
+        return not (skip_addr and p.identifier().UUIDString() == skip_addr)
+
+    # 1. Custom service — accept by service membership alone.
+    custom = cm.retrieveConnectedPeripheralsWithServices_(
+        [CBUUID.UUIDWithString_(SERVICE_UUID)]
+    )
+    for p in custom or []:
+        if _ok(p):
+            return _wrap(p)
+
+    # 2. Generic HID service — require an exact name match.
+    hid = cm.retrieveConnectedPeripheralsWithServices_(
+        [CBUUID.UUIDWithString_("1812")]
+    )
+    for p in hid or []:
+        if _ok(p) and p.name() == DEVICE_NAME:
+            return _wrap(p)
+
+    return None
+
+
+async def discover_target(skip_addr: str | None = None):
+    """Return a connectable target, or None.
+
+    macOS: prefer the system-connected peripheral (HID-grabbed devices are
+    invisible to scans); fall back to a normal scan that yields a BLEDevice
+    so the subsequent connect doesn't have to re-scan. ``skip_addr`` is
+    forwarded so a just-failed peripheral is skipped, making the scan
+    fallback reachable.
+
+    Other platforms: keep the original cached-address / scan-by-name flow.
+    A freshly scanned address is cached here (the only place it's saved).
+    """
+    if sys.platform == "darwin":
+        dev = await retrieve_connected_macos(skip_addr=skip_addr)
+        if dev is not None:
+            return dev
+        log(f"Not held by OS; scanning for '{DEVICE_NAME}' ({SCAN_TIMEOUT}s)...")
+        dev = await BleakScanner.find_device_by_name(DEVICE_NAME, timeout=SCAN_TIMEOUT)
+        if dev:
+            log(f"Found: {dev.address}")
+        return dev
+
+    address = load_cached_address()
+    if not address:
+        address = await scan_for_device()
+        if address:
+            save_address(address)  # cache only freshly-scanned addresses
+    return address
+
+
 async def poll_api(token: str) -> dict | None:
     headers = dict(API_HEADERS_TEMPLATE)
     headers["Authorization"] = f"Bearer {token}"
@@ -439,14 +553,16 @@ class Session:
             return False
 
 
-async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = False) -> bool:
-    """Connect to a known address and poll until disconnected or stopped.
+async def connect_and_run(target, stop_event: asyncio.Event, once: bool = False) -> bool:
+    """Connect to a target and poll until disconnected or stopped.
 
-    Returns True if the connection was used successfully (so the caller
-    keeps the cached address), False if the connection failed and the
-    cache should be invalidated.
+    ``target`` is either an address string (Linux) or a BLEDevice carrying
+    live CoreBluetooth details (macOS). Returns True if the connection was
+    used successfully (so the caller keeps the cached address), False if the
+    connection failed and the cache should be invalidated.
     """
-    log(f"Connecting to {address}...")
+    display = target if isinstance(target, str) else target.address
+    log(f"Connecting to {display}...")
     # Windows/WinRT needs two nudges that CoreBluetooth and BlueZ don't:
     #
     #  1. pair=True -- WinRT does not auto-bond when an encrypted characteristic
@@ -465,9 +581,9 @@ async def connect_and_run(address: str, stop_event: asyncio.Event, once: bool = 
     # Both are gated to Windows: pair() is unavailable on macOS, BlueZ bonds
     # implicitly, and neither platform needs the cache override.
     if sys.platform == "win32":
-        client = BleakClient(address, pair=True, winrt={"use_cached_services": False})
+        client = BleakClient(target, pair=True, winrt={"use_cached_services": False})
     else:
-        client = BleakClient(address)
+        client = BleakClient(target)
     try:
         await client.connect()
     except (BleakError, asyncio.TimeoutError) as e:
@@ -545,28 +661,34 @@ async def main(once: bool = False) -> None:
         log("Priming run: will exit after the first usage update is sent")
 
     backoff = 1
+    skip_addr: str | None = None  # macOS: a peripheral to skip for one cycle
     while not stop_event.is_set():
-        address = load_cached_address()
-        if not address:
-            address = await scan_for_device()
-            if address:
-                save_address(address)
-            else:
-                log(f"Device not found, retrying in {backoff}s...")
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=backoff)
-                except asyncio.TimeoutError:
-                    pass
-                backoff = min(backoff * 2, 60)
-                continue
+        # Apply any pending skip exactly once, then clear it so the next
+        # cycle re-tries retrieveConnected (the device may have recovered).
+        target = await discover_target(skip_addr=skip_addr)
+        skip_addr = None
+        if not target:
+            log(f"Device not found, retrying in {backoff}s...")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+            except asyncio.TimeoutError:
+                pass
+            backoff = min(backoff * 2, 60)
+            continue
 
-        ok = await connect_and_run(address, stop_event, once=once)
+        addr = target if isinstance(target, str) else target.address
+        ok = await connect_and_run(target, stop_event, once=once)
         if once and ok:
             log("First usage update sent -- priming complete; the background task takes over now")
             return
         if not ok:
-            log("Invalidating cached address")
-            SAVED_ADDR_FILE.unlink(missing_ok=True)
+            if sys.platform == "darwin":
+                # No string cache to drop; instead skip this stale handle on
+                # the next retrieveConnected so the scan fallback is reachable.
+                skip_addr = addr
+            else:
+                log("Invalidating cached address")
+                SAVED_ADDR_FILE.unlink(missing_ok=True)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=backoff)
             except asyncio.TimeoutError:
