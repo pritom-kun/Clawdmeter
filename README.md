@@ -30,6 +30,9 @@ Boards supported out of the box:
 - [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786)
 - [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm?&aff_id=149786) 
 - [Waveshare ESP32-S3-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-s3-touch-amoled-1.8.htm?&aff_id=149786)
+- [Waveshare ESP32-C6-Touch-AMOLED-1.8](https://www.waveshare.com/esp32-c6-touch-amoled-1.8.htm?&aff_id=149786)
+- [Waveshare ESP32-S3-Touch-AMOLED-2.06](https://www.waveshare.com/esp32-s3-touch-amoled-2.06.htm?&aff_id=149786)
+- [Waveshare ESP32-S3-Touch-LCD-1.54](https://www.waveshare.com/esp32-s3-lcd-1.54.htm?sku=33869) (240x240 SPI TFT, not AMOLED)
 
 > Please check if a pull request exists for your alternative hardware port before opening a new one, providing QA feedback and testing on the same hardware is more valuable than duplicate pull requests.
 
@@ -58,7 +61,7 @@ The board env name is required. Run `./flash-mac.sh` with no args to see the ava
 
 ### Pair the device
 
-After flashing, open **System Settings → Bluetooth** and click *Connect* next to "Clawdmeter". The daemon will discover it on its next scan (~30 s).
+After flashing, open **System Settings → Bluetooth** and click *Connect* next to "Clawdmeter". The daemon only ever connects to the peripheral this Mac is paired/connected to — it never scans for a nearby device — so once it's connected here the daemon picks it up on its next poll (~60 s).
 
 ### Install the daemon
 
@@ -117,6 +120,70 @@ systemctl --user start claude-usage-daemon
 Check status: `systemctl --user status claude-usage-daemon`
 
 View logs: `journalctl --user -u claude-usage-daemon -f`
+
+## Windows installation
+
+Runs natively on Windows — no WSL required. A system-tray app polls your usage and pushes it over BLE, and starts automatically at login.
+
+### Prerequisites
+
+- **Native Windows** (not WSL).
+- **Python 3.11+** from [python.org](https://www.python.org/downloads/) — check *"Add python.exe to PATH"* during install.
+- **Claude Code** installed, with `claude login` completed. The token is read from `%USERPROFILE%\.claude\.credentials.json` (falling back to `%LOCALAPPDATA%\Claude\` then `%APPDATA%\Claude\`).
+- The repo on a **native Windows path** (e.g. `%USERPROFILE%\Clawdmeter`), **not** a `\\wsl$` share — the installer refuses a WSL path.
+
+### Flash the firmware
+
+```powershell
+pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port COM5   # use your device's COM port
+```
+
+Run `pio run -d firmware` with no env to see the available board envs.
+
+### Pair the device
+
+The device is a bonded BLE HID keyboard, so pair it once: **Settings → Bluetooth & devices → Add device → Bluetooth**, then select "Clawdmeter". Pairing is **required** — it enables the physical buttons and keeps a persistent connection (the device keeps showing your last-synced usage even after the daemon quits). To undo, use **Remove device** (this disables the buttons).
+
+### Install the daemon (recommended)
+
+From the repo root in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-windows.ps1
+```
+
+This creates a venv, installs `bleak`/`httpx`/`pystray`/`Pillow` from the in-repo requirements (no internet downloads), registers a per-user login-autostart entry (`HKCU\…\Run`, no admin needed), and launches the tray app headlessly (no console window).
+
+### Run manually instead (optional)
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned, then retry
+pip install -r daemon\requirements-windows.txt
+python daemon\claude_usage_daemon_windows.py        # runs in the foreground; Ctrl+C to stop
+```
+
+### Tray icon and menu
+
+The icon's corner bubble shows state — **green** Connected, **amber** Scanning, **red** Error — and hovering shows the status (`Connected · last update HH:MM`). A notification fires once when it enters Error (e.g. an expired token). Right-click for the menu:
+
+- **Status header** — live state + last sync time.
+- **Start at login** — toggle autostart on/off.
+- **Quit** — stops the daemon cleanly; leaves the Windows pairing intact (device keeps its last reading).
+
+### Logs and troubleshooting
+
+```powershell
+Get-Content $env:LOCALAPPDATA\Clawdmeter\daemon.log -Tail 30        # view logs
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Clawdmeter /f   # remove autostart
+```
+
+| Symptom | Fix |
+|---------|-----|
+| `Device not found` | Power on the device; make sure it's in range and paired. |
+| `token expired` toast / `API HTTP 401` | Re-run `claude login`, then restart the daemon. |
+| `Connection failed` | Toggle Windows Bluetooth off/on in Settings. |
+| `Warning: running under Linux/WSL` | Run from a native PowerShell window, not a WSL shell. |
 
 ## How it works
 
@@ -197,31 +264,6 @@ lv_font_conv --font assets/DejaVuSansMono.ttf \
 4. Add `.fallback = NULL`, `.user_data = NULL` to the font struct
 
 Without these patches, fonts compile but render as invisible.
-
-### CJK support
-
-`firmware/src/font_cjk_16.c` covers the full CJK Unified Ideographs basic
-block (U+4E00–U+9FFF, ~20k glyphs) plus ASCII, CJK punctuation, and
-halfwidth/fullwidth forms. Generated from [Noto Sans CJK SC](https://github.com/notofonts/noto-cjk)
-(SIL OFL 1.1) at 16px, 2bpp:
-
-```bash
-lv_font_conv --font NotoSansCJKsc-Regular.otf --size 16 --bpp 2 \
-  --no-compress --format lvgl --lv-include 'lvgl.h' \
-  -r '0x20-0x7E,0xB7,0x2014,0x2018-0x2019,0x201C-0x201D,0x2026,0x3000-0x303F,0x4E00-0x9FFF,0xFF00-0xFFEF' \
-  -o firmware/src/font_cjk_16.c
-```
-
-Then apply the four LVGL 9 patches above. Because the font has >65k of
-glyph bitmap data, the build needs `-DLV_FONT_FMT_TXT_LARGE=1` in
-`platformio.ini` build flags so font descriptor offsets switch from
-16-bit to 32-bit.
-
-The CJK font is used for the Activity screen's user-prompt row and todo
-content rows. The headline (28pt Styrene B) and titles stay ASCII-only
-to preserve the brand font — Chinese text in those slots renders as
-empty boxes. Add a `font_cjk_28.c` if full coverage is needed (~1MB
-more flash).
 
 ## Converting Lucide icons
 
